@@ -1,0 +1,29 @@
+# Build output.
+#
+# `dist/` in particular must never be committed. The publish workflow uploads
+# everything in that directory, so a stale wheel checked out alongside a freshly
+# built one would be uploaded too — and PyPI rejects a version that already
+# exists, failing the whole release.
+dist/
+build/
+*.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

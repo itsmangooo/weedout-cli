@@ -1,44 +1,35 @@
 [project]
 name = "weedout-cli"
+version = "0.1.0"
 description = "Scan your dependencies for the CVEs that actually matter, from the command line or CI."
 readme = "README.md"
 requires-python = ">=3.10"
-# TODO(license): this declares MIT — carried over from the first draft of this
-# file — but the repository has no LICENSE file and its README still says the
-# licence is undecided. PyPI will show "MIT" on the project page while the
-# wheel ships no licence text, which is a claim without the document behind it.
-#
-# Settle it before the first publish. If MIT is right, add a LICENSE file at the
-# repository root and re-add `license-files = ["../LICENSE"]` here; if it is
-# not, change this line. Not guessed at, because it is a legal statement about
-# somebody else's code.
-license = "MIT"
 keywords = ["security", "cve", "vulnerability", "dependencies", "sca", "ci"]
 authors = [{ name = "Weedout" }]
 
-# The version lives in exactly one place: `weedout_cli.__version__`.
+# TODO(license): this declares MIT, carried over from the first draft, but there
+# is no LICENSE file in this repository. PyPI will show "MIT" on the project
+# page while the wheel ships no licence text — a claim without the document
+# behind it.
 #
-# It used to be written here as well, which meant `weedout --version` and the
-# version on PyPI were two separate facts that had to be updated together. A
-# release that changed one and not the other would ship a wheel whose own
-# `--version` lied about which wheel it was. The publish workflow additionally
-# checks the git tag against this value before uploading anything.
-dynamic = ["version"]
+# Settle it before the first publish. If MIT is right, add a LICENSE file beside
+# this one and add `license-files = ["LICENSE"]` here. Not guessed at: it is a
+# legal statement about somebody else's code.
+license = "MIT"
 
 # No runtime dependencies, and that is a feature.
 #
 # This package is installed into the same environment as the project being
 # built, frequently by a `pip install` in a CI step that also installs the
 # project's own requirements. Anything listed here becomes a version constraint
-# that someone else's build has to satisfy — to solve a problem that is one
-# POST request and one argument parser wide. `urllib` and `argparse` are in the
-# standard library and are enough.
+# that someone else's build has to satisfy — to solve a problem that is one POST
+# request and one argument parser wide. `urllib` and `argparse` are enough.
 dependencies = []
 
-# 3.10 rather than the server's 3.13: a CI runner's Python is whatever the
-# project already uses, and refusing to install on it would make the tool
-# unusable exactly where it is meant to run. 3.10 is the floor because the
-# dataclasses here use `slots=True`; everything below it is past end of life.
+# 3.10 is the floor because the dataclasses here use `slots=True`. Everything
+# below it is past end of life, and a CI runner's Python is whatever the project
+# being scanned already uses — refusing to install would make the tool unusable
+# exactly where it is meant to run.
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -59,20 +50,22 @@ classifiers = [
 [project.urls]
 Homepage = "https://weedout.dev"
 Documentation = "https://weedout.dev/docs"
-Repository = "https://github.com/itsmangooo/weedout"
-Issues = "https://github.com/itsmangooo/weedout/issues"
+Repository = "https://github.com/itsmangooo/weedout-cli"
+Issues = "https://github.com/itsmangooo/weedout-cli/issues"
 
-# `weedout` on PATH after `pip install weedout-cli`. `run()` wraps `main()` and
-# calls `sys.exit`, so the shell sees the exit code a pipeline gates on.
+# Puts `weedout` on PATH after `pip install weedout-cli`. `run()` wraps `main()`
+# and calls `sys.exit`, so the shell sees the exit code a pipeline gates on.
 [project.scripts]
 weedout = "weedout_cli.cli:run"
 
+# setuptools rather than hatchling: the layout is one flat package and setuptools
+# already builds it correctly, so switching backends would be churn with no
+# functional difference.
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.dynamic]
-version = { attr = "weedout_cli.__version__" }
-
 [tool.setuptools.packages.find]
+# Without this, setuptools' auto-discovery also treats `dist` and any stray
+# top-level directory as packages and fails with an ambiguity error.
 include = ["weedout_cli*"]

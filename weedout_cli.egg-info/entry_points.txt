@@ -1,2 +1,0 @@
-[console_scripts]
-weedout = weedout_cli.cli:run

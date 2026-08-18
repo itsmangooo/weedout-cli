@@ -143,4 +143,5 @@ crashing mid-print.
 - [Documentation](https://weedout.dev/docs)
 - [Scanning your project](https://weedout.dev/docs/scanning-your-project)
 - [Gate your pipeline](https://weedout.dev/docs/gate-your-pipeline)
-- [Source](https://github.com/itsmangooo/weedout)
+- [Source](https://github.com/itsmangooo/weedout-cli) — this CLI
+- [Weedout](https://github.com/itsmangooo/weedout) — the service it talks to
