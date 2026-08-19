@@ -1,147 +1,140 @@
-# weedout-cli
+# weedout
 
-Scan your dependencies for the CVEs that actually matter, from your terminal or
-your pipeline.
+Scan your dependencies for the CVEs that actually matter.
 
-[Weedout](https://weedout.dev) watches dependency manifests and reports two
-kinds of vulnerability: the ones attackers are actively exploiting right now,
-and the ones that are severe and reachable in the code you actually ship.
-Everything else is recorded, counted, and left alone.
+One binary. No runtime, no interpreter, and no third-party packages — the whole
+thing is the Go standard library.
+
+```
+$ weedout scan
+acme-storefront  package-lock.json
+312 dependencies scanned · 47 filtered out as noise
+
+  1 exploited  ·  2 critical  ·  5 high
+
+  ! systeminformation@5.0.0  CVE-2021-21315  → 5.3.1
+  • minimist@1.2.0  CVE-2021-44906  → 1.2.6
+
+  https://weedout.dev/targets/42
+```
+
+The second number is the one worth reading. Most advisories that match your
+lockfile do not deserve to interrupt anyone, and this tells you how many it
+decided not to.
 
 ## Install
 
-```bash
-pip install weedout-cli
+```sh
+curl -sSL https://weedout.dev/install.sh | sh
 ```
 
-No dependencies. This installs into the same environment as the project you are
-building, so it deliberately brings nothing with it that could conflict with
-what that project needs.
+It works out your platform, downloads the matching binary from the latest
+GitHub release, verifies the published checksum, and puts it somewhere on your
+PATH. It is short, and you should [read it](install.sh) before piping anything
+into a shell.
+
+With Go:
+
+```sh
+go install github.com/itsmangooo/weedout-cli@latest
+```
+
+Or download a binary directly from
+[releases](https://github.com/itsmangooo/weedout-cli/releases). Builds are
+published for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and
+windows/amd64.
 
 ## Use
 
-```bash
-export WEEDOUT_API_KEY=wo_...
-weedout scan
+```sh
+weedout init          # save your API key to .weedout
+weedout scan          # scan this project
+weedout scan --ci     # and fail the build on anything critical or exploited
 ```
 
-`weedout scan` finds a manifest in the current directory, checks it, and prints
-what came back:
+`weedout init` writes a `.weedout` file holding your key. **Add it to
+`.gitignore`** — the command says so too. In CI, skip it and set
+`WEEDOUT_API_KEY` instead: the environment always beats the file, so a key
+committed by accident can never quietly override the one your pipeline was
+configured with.
 
-```
-demo-app  /home/you/demo-app/package-lock.json
-412 dependencies scanned · 33 filtered out as noise
+### What it scans
 
-  1 exploited  ·  1 critical
+It looks for the file that says what is *actually installed*, preferring a
+lockfile over the manifest it was resolved from:
 
-  ! systeminformation@5.0.0  CVE-2021-21315  → 5.3.1
-  • minimist@1.2.5           CVE-2021-44906  → 1.2.6
+| File                | Ecosystem | Notes                                  |
+| ------------------- | --------- | -------------------------------------- |
+| `package-lock.json` | npm       | preferred over `package.json`          |
+| `package.json`      | npm       | versions are inferred from the ranges  |
+| `requirements.txt`  | PyPI      |                                        |
+| `go.mod`            | Go        |                                        |
 
-  https://weedout.dev/targets/12
-```
-
-`!` is on CISA's exploited list; `•` cleared the bar on severity alone. The
-"filtered out as noise" count is the number of real advisories that matched your
-versions and were deliberately *not* shown — browsable on the dashboard with the
-reason attached for each.
-
-Create an API key in **Settings** on your dashboard. Keys belong to a single
-project, so one leaked from a build log can only push results for the
-repository that build was for.
-
-### In CI
-
-```bash
-weedout scan --ci
-```
-
-`--ci` fails the command when something critical or actively exploited is
-found. Without it, findings are reported and the command still succeeds —
-adding a security tool should not be the thing that breaks your build first.
-
-**GitHub Actions:**
-
-```yaml
-jobs:
-  security-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm ci
-      - uses: itsmangooo/weedout/.github@v1
-        with:
-          api-key: ${{ secrets.WEEDOUT_API_KEY }}
-
-  deploy:
-    needs: security-scan       # this is what makes it a gate
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Deploying"
-```
+`yarn.lock`, `pnpm-lock.yaml`, `poetry.lock`, `Pipfile.lock` and `go.sum` are
+not supported yet. If one is present and nothing else is, the CLI says so by
+name and tells you which file to point at instead — rather than uploading
+something the API cannot read and leaving you with a parse error.
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | The scan ran. Nothing blocking. |
-| `1` | The scan ran and found something critical or actively exploited (`--ci` only). |
-| `2` | The scan did **not** run — bad key, unreachable service, no manifest found. |
+| Code | Meaning                                                    |
+| ---- | ---------------------------------------------------------- |
+| `0`  | ran, nothing blocking                                      |
+| `1`  | ran, found something critical or exploited (`--ci` only)   |
+| `2`  | did not run — bad key, unreachable service, or no manifest  |
 
-`2` is separate from `1` on purpose. A pipeline that treats every non-zero exit
-as "vulnerabilities found" will eventually treat an expired API key as a
-security finding, and somebody will fix it by deleting the step. `2` means you
-learned nothing, which is a different problem with a different fix.
+The gap between `1` and `2` is the point. A pipeline that treats every non-zero
+exit as "vulnerabilities found" will eventually treat an expired API key as a
+security finding, and somebody will fix that by deleting the step. A scan that
+could not run is never reported as a clean scan, and never as a failing one.
 
-## What gets scanned
+Without `--ci`, findings are printed but the command still exits `0`. Adding
+this tool to a pipeline should never be the thing that breaks the build first.
 
-| File | Ecosystem |
-|---|---|
-| `package-lock.json` | npm |
-| `package.json` | npm |
-| `requirements.txt` | PyPI |
-| `go.mod` | Go |
+### In GitHub Actions
 
-A lockfile wins when both are present. `package-lock.json` records the version
-that is actually installed; `package.json` records a range, and scanning a
-range means assuming the lowest version it permits. Weedout labels that
-assumption on every finding it affects rather than presenting a guess as a
-fact — but running `weedout scan` after your install step removes the guess
-entirely.
-
-`node_modules` is never searched, and the walk goes two directories deep. A
-repository root is where a manifest lives; wandering through a monorepo would
-mean reporting on an arbitrary sub-package.
+```yaml
+- name: Check dependencies
+  run: |
+    curl -sSL https://weedout.dev/install.sh | sh
+    weedout scan --ci
+  env:
+    WEEDOUT_API_KEY: ${{ secrets.WEEDOUT_API_KEY }}
+```
 
 ## Configuration
 
-The API key is resolved in this order:
+Resolved highest-first:
 
-1. `--api-key`
-2. `WEEDOUT_API_KEY`
-3. `api_key` in a `.weedout` file, searched from the current directory upward
+1. `--api-key` on the command line
+2. `WEEDOUT_API_KEY` in the environment
+3. `api_key` in a `.weedout` file, searched from the working directory upward
 
-The environment beating the file is deliberate. CI injects secrets as
-environment variables, and a `.weedout` that got committed must never quietly
-override the key your pipeline was configured with.
+`--url` / `WEEDOUT_URL` points the CLI at a self-hosted instance.
 
-`weedout init` writes a `.weedout` for local use. **Add it to `.gitignore`** —
-it holds a credential.
+## Dependencies
 
+None. `go.mod` has no `require` block, and
+[weedout.dev/cli](https://weedout.dev/cli) reads that file directly rather than
+listing packages by hand.
+
+Every dependency in a security tool is another thing you have to trust, and a
+CI runner is the last place that benefits from a dependency tree. The HTTP call
+is `net/http`, the parsing is `encoding/json`, the upload is `mime/multipart`,
+the arguments are `flag`, and the coloured output is about thirty lines of ANSI
+escapes.
+
+## Building
+
+```sh
+go test ./...
+go build .
 ```
-weedout scan [PATH] [--ci] [--api-key KEY] [--url URL] [--timeout N] [-v]
-weedout init [PATH] [--api-key KEY] [--url URL] [--force]
-```
 
-`--url` and `WEEDOUT_URL` point the CLI at a self-hosted instance.
+Go 1.22 or newer. Releases are cross-compiled by GitHub Actions on a `v*` tag
+and published with checksums.
 
-Symbols degrade to ASCII (`->`, `*`, `-`) when the terminal's encoding cannot
-represent them, so a default Windows console shows a plain report rather than
-crashing mid-print.
+## Licence
 
-## Links
-
-- [Documentation](https://weedout.dev/docs)
-- [Scanning your project](https://weedout.dev/docs/scanning-your-project)
-- [Gate your pipeline](https://weedout.dev/docs/gate-your-pipeline)
-- [Source](https://github.com/itsmangooo/weedout-cli) — this CLI
-- [Weedout](https://github.com/itsmangooo/weedout) — the service it talks to
+Not yet chosen. Until one is added, the usual default applies: all rights
+reserved.
