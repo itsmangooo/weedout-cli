@@ -1,25 +1,20 @@
 # Build output.
 #
-# `dist/` in particular must never be committed. The publish workflow uploads
-# everything in that directory, so a stale wheel checked out alongside a freshly
-# built one would be uploaded too — and PyPI rejects a version that already
-# exists, failing the whole release.
+# `dist/` holds the cross-compiled binaries the release workflow uploads. A
+# stale binary checked out alongside a freshly built one would be published
+# too, so it never belongs in the repository.
 dist/
-build/
-*.egg-info/
+weedout
+weedout.exe
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# Go
+*.test
+*.out
+coverage.txt
 
-# Tooling caches
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
+# A developer's own project config. It holds an API key by design — the point
+# of the warning the CLI prints when it writes one.
+.weedout
 
 # Editors / OS
 .vscode/
