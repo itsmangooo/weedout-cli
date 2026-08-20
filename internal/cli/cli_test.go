@@ -3,12 +3,16 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itsmangooo/weedout-cli/internal/api"
+	"time"
 )
 
 // serve stands up a fake scan API returning the given payload.
@@ -530,5 +534,198 @@ func TestAnOldClientStillSeesSomethingSane(t *testing.T) {
 	_, out := run(t, "scan", project(t), "--json", "--api-key", "k", "--url", server.URL)
 	if strings.Contains(out, `"severity": "malicious"`) {
 		t.Error("malicious leaked into the severity field")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Flag handling and quiet mode
+// ---------------------------------------------------------------------------
+
+func TestEveryValueFlagWorksOnEitherSideOfThePath(t *testing.T) {
+	// The regression this guards: flag values used to be separated from the
+	// path by a hand-maintained list of which flags take one. A flag missing
+	// from that list had its value silently taken as the path, so
+	// `weedout scan --fail-on high` would have scanned a directory called
+	// "high". The flag set is asked now, so the list cannot drift.
+	server := serve(t, 200, highOnly())
+	dir := project(t)
+
+	orders := [][]string{
+		{"scan", dir, "--ci", "--fail-on", "high", "--api-key", "k", "--url", server.URL},
+		{"scan", "--ci", "--fail-on", "high", dir, "--api-key", "k", "--url", server.URL},
+		{"scan", "--fail-on", "high", "--api-key", "k", "--url", server.URL, "--ci", dir},
+		{"scan", "--fail-on=high", dir, "--ci", "--api-key=k", "--url=" + server.URL},
+	}
+	for _, argv := range orders {
+		code, out := run(t, argv...)
+		if code != ExitFindings {
+			t.Errorf("exit %d, want %d for %v\n%s", code, ExitFindings, argv, out)
+		}
+	}
+}
+
+func TestQuietPrintsNothingAndStillGates(t *testing.T) {
+	server := serve(t, 200, highOnly())
+	code, out := run(t, "scan", project(t), "--ci", "--fail-on", "high", "--quiet",
+		"--api-key", "k", "--url", server.URL)
+
+	if code != ExitFindings {
+		t.Fatalf("exit %d, want %d: --quiet must still gate", code, ExitFindings)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("--quiet should print nothing, got:\n%s", out)
+	}
+}
+
+func TestQuietStillReportsAScanThatCouldNotRun(t *testing.T) {
+	// Silencing "your key was rejected" would turn a broken setup into a
+	// passing build, which is the one failure this tool must never produce.
+	server := serve(t, 401, map[string]any{"error": "invalid_key"})
+	code, out := run(t, "scan", project(t), "--ci", "--quiet",
+		"--api-key", "k", "--url", server.URL)
+
+	if code != ExitError {
+		t.Fatalf("exit %d, want %d", code, ExitError)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Error("--quiet must not silence the reason a scan did not run")
+	}
+}
+
+func TestAnOversizedManifestFailsBeforeUploading(t *testing.T) {
+	// Fails in a sentence rather than by reading a bundle into memory and
+	// sending it to be refused.
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	dir := t.TempDir()
+	big := make([]byte, 6<<20)
+	for i := range big {
+		big[i] = 'x'
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := run(t, "scan", dir, "--api-key", "k", "--url", server.URL)
+	if code != ExitError {
+		t.Fatalf("exit %d, want %d", code, ExitError)
+	}
+	if reached {
+		t.Error("an oversized manifest was uploaded instead of being refused locally")
+	}
+	if !strings.Contains(out, "limit is 5 MB") {
+		t.Errorf("the refusal should say what the limit is, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Retries
+//
+// This runs inside somebody's build. A momentary 502 that fails the pipeline
+// is a flaky build, and a flaky security gate is one people start ignoring.
+// ---------------------------------------------------------------------------
+
+// noRetryDelay flattens the backoff for the duration of one test. The delays
+// are real behaviour worth keeping; paying for them in the suite is not.
+func noRetryDelay(t *testing.T) {
+	t.Helper()
+	original := api.RetryDelay
+	api.RetryDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { api.RetryDelay = original })
+}
+
+// flaky serves `failures` responses of `status`, then the payload.
+func flaky(t *testing.T, status, failures int, payload any) (*httptest.Server, *int) {
+	t.Helper()
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		// The body has to arrive intact on every attempt: an http.Request's
+		// body is consumed by the first send, so a retry that does not rebuild
+		// it uploads zero bytes.
+		uploaded, _ := io.ReadAll(r.Body)
+		if len(uploaded) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "empty upload on retry"})
+			return
+		}
+		if attempts <= failures {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	t.Cleanup(server.Close)
+	return server, &attempts
+}
+
+func TestATransientGatewayErrorIsRetried(t *testing.T) {
+	noRetryDelay(t)
+	clean := map[string]any{
+		"project": "demo", "actionable": 0, "counts": map[string]int{}, "findings": []any{},
+	}
+	server, attempts := flaky(t, http.StatusBadGateway, 1, clean)
+
+	code, out := run(t, "scan", project(t), "--ci", "--api-key", "k", "--url", server.URL)
+
+	if code != ExitOK {
+		t.Fatalf("exit %d, want %d after a retry\n%s", code, ExitOK, out)
+	}
+	if *attempts != 2 {
+		t.Errorf("attempts = %d, want 2", *attempts)
+	}
+}
+
+func TestTheUploadSurvivesARetry(t *testing.T) {
+	noRetryDelay(t)
+	// The bug this guards: retrying without rebuilding the body sends zero
+	// bytes, and the server answers 400 about a file that was fine.
+	clean := map[string]any{
+		"project": "demo", "actionable": 0, "counts": map[string]int{}, "findings": []any{},
+	}
+	server, _ := flaky(t, http.StatusServiceUnavailable, 2, clean)
+
+	code, out := run(t, "scan", project(t), "--api-key", "k", "--url", server.URL)
+	if code != ExitOK {
+		t.Fatalf("exit %d, want %d; the retried upload was empty?\n%s", code, ExitOK, out)
+	}
+}
+
+func TestARejectedKeyIsNotRetried(t *testing.T) {
+	noRetryDelay(t)
+	// A 401 will be a 401 next time. Retrying turns one clear "your key is
+	// wrong" into three, and triples the time before the person sees it.
+	server, attempts := flaky(t, http.StatusUnauthorized, 99, nil)
+
+	code, _ := run(t, "scan", project(t), "--api-key", "k", "--url", server.URL)
+
+	if code != ExitError {
+		t.Fatalf("exit %d, want %d", code, ExitError)
+	}
+	if *attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a rejected key is not transient", *attempts)
+	}
+}
+
+func TestGivingUpReportsTheServersOwnWords(t *testing.T) {
+	noRetryDelay(t)
+	server, attempts := flaky(t, http.StatusServiceUnavailable, 99, nil)
+
+	code, out := run(t, "scan", project(t), "--ci", "--api-key", "k", "--url", server.URL)
+
+	if code != ExitError {
+		t.Fatalf("exit %d, want %d: a scan that never ran is not a clean one", code, ExitError)
+	}
+	if *attempts != 3 {
+		t.Errorf("attempts = %d, want 3", *attempts)
+	}
+	if !strings.Contains(out, "not a clean result") {
+		t.Errorf("the failure must not read as a pass, got:\n%s", out)
 	}
 }

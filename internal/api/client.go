@@ -141,8 +141,32 @@ func (r Result) BlockingAt(t Threshold) int {
 	return n
 }
 
+// MaxManifestBytes matches what the server accepts.
+//
+// Checked here as well, so a mistake -- a lockfile with a megabyte of vendored
+// data, or a path pointing at something that is not a manifest at all -- fails
+// in a sentence instead of by reading the file into memory and uploading it to
+// be refused.
+const MaxManifestBytes = 5 << 20
+
 // PostScan uploads a manifest and returns the parsed result.
 func PostScan(baseURL, apiKey, path string, timeout time.Duration) (Result, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Result{}, &Error{
+			Message: fmt.Sprintf("Could not read %s: %v", path, err),
+			Code:    "unreadable_file",
+		}
+	}
+	if info.Size() > MaxManifestBytes {
+		return Result{}, &Error{
+			Message: fmt.Sprintf(
+				"%s is %d MB, and the limit is %d MB. Point at a lockfile rather than a bundle.",
+				filepath.Base(path), info.Size()>>20, MaxManifestBytes>>20),
+			Code: "file_too_large",
+		}
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return Result{}, &Error{
@@ -183,24 +207,14 @@ func PostScan(baseURL, apiKey, path string, timeout time.Duration) (Result, erro
 	request.Header.Set("User-Agent", UserAgent)
 
 	client := &http.Client{Timeout: timeout}
-	response, err := client.Do(request)
-	if err != nil {
-		return Result{}, &Error{
-			Message: fmt.Sprintf("Could not reach %s: %v", baseURL, unwrapNetError(err)),
-			Code:    "unreachable",
-		}
-	}
-	defer response.Body.Close()
 
-	// Bounded read. A misconfigured URL can point at something that streams
-	// indefinitely, and a CI step should fail rather than fill the disk.
-	payload, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+	payload, status, err := doWithRetry(client, request, body.Bytes(), baseURL)
 	if err != nil {
-		return Result{}, &Error{Message: "Truncated response from the server.", Code: "bad_response"}
+		return Result{}, err
 	}
 
-	if response.StatusCode != http.StatusOK {
-		return Result{}, errorFromResponse(response.StatusCode, payload)
+	if status != http.StatusOK {
+		return Result{}, errorFromResponse(status, payload)
 	}
 
 	var result Result
@@ -208,13 +222,114 @@ func PostScan(baseURL, apiKey, path string, timeout time.Duration) (Result, erro
 		return Result{}, &Error{
 			Message: "The server sent a response that was not JSON.",
 			Code:    "bad_response",
-			Status:  response.StatusCode,
+			Status:  status,
 		}
 	}
 	if result.Counts == nil {
 		result.Counts = map[string]int{}
 	}
 	return result, nil
+}
+
+// Attempts is how many times a transient failure is retried before giving up.
+//
+// Small on purpose. This runs inside somebody's build, and a step that spends
+// two minutes retrying is worse than one that fails in ten seconds with a
+// message saying what went wrong.
+const Attempts = 3
+
+// RetryDelay is the wait before attempt n (1-indexed), so 0s, 1s, 3s.
+//
+// A variable rather than a constant so tests can flatten it. Without that the
+// suite pays four real seconds for every retry case, which is a cost that only
+// grows and eventually gets paid by deleting the tests.
+var RetryDelay = func(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return 0
+	case 2:
+		return time.Second
+	default:
+		return 3 * time.Second
+	}
+}
+
+// retryable reports whether a status is worth a second attempt.
+//
+// Only the ones where trying again can plausibly work: a gateway that was
+// restarting, a rate limit that has since expired, a request that timed out in
+// transit. A 401 will be a 401 next time too, and retrying it would turn one
+// clear "your key is wrong" into three.
+func retryable(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// doWithRetry sends the request, retrying transient failures.
+//
+// The body is passed separately and rebuilt for each attempt: an
+// http.Request's body is a reader that is consumed by the first send, so
+// retrying without rebuilding it uploads zero bytes and gets a confusing 400.
+func doWithRetry(
+	client *http.Client, request *http.Request, body []byte, baseURL string,
+) ([]byte, int, error) {
+	var lastErr error
+	var lastStatus int
+	var lastPayload []byte
+
+	for attempt := 1; attempt <= Attempts; attempt++ {
+		if wait := RetryDelay(attempt); wait > 0 {
+			time.Sleep(wait)
+		}
+
+		attemptReq := request.Clone(request.Context())
+		attemptReq.Body = io.NopCloser(bytes.NewReader(body))
+		attemptReq.ContentLength = int64(len(body))
+
+		response, err := client.Do(attemptReq)
+		if err != nil {
+			// A timeout or a refused connection. Both are worth another go:
+			// CI networks are not reliable, and a runner that just came up may
+			// beat its own DNS.
+			lastErr = &Error{
+				Message: fmt.Sprintf("Could not reach %s: %v", baseURL, unwrapNetError(err)),
+				Code:    "unreachable",
+			}
+			continue
+		}
+
+		// Bounded read. A misconfigured URL can point at something that
+		// streams indefinitely, and a CI step should fail rather than fill the
+		// disk.
+		payload, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+		response.Body.Close()
+		if readErr != nil {
+			lastErr = &Error{
+				Message: "Truncated response from the server.",
+				Code:    "bad_response",
+			}
+			continue
+		}
+
+		if retryable(response.StatusCode) && attempt < Attempts {
+			lastStatus, lastPayload, lastErr = response.StatusCode, payload, nil
+			continue
+		}
+
+		return payload, response.StatusCode, nil
+	}
+
+	if lastErr != nil {
+		return nil, 0, lastErr
+	}
+	// Ran out of attempts on a retryable status; report the server's own words.
+	return lastPayload, lastStatus, nil
 }
 
 func unwrapNetError(err error) error {

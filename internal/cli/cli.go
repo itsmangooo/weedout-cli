@@ -80,6 +80,7 @@ Scan flags:
   --ci                     exit 1 if anything at or above --fail-on is found
   --fail-on LEVEL          critical (default) or high
   --json                   print the result as JSON instead of prose
+  -q, --quiet              print nothing; the exit code is the answer
   --api-key KEY            overrides $`+config.EnvAPIKey+`
   --url URL                API base URL (default: `+config.DefaultBaseURL+`)
   --timeout SECONDS        how long to wait (default: 120)
@@ -98,6 +99,8 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	ci := fs.Bool("ci", false, "exit 1 on findings at or above --fail-on")
 	failOn := fs.String("fail-on", "critical", "severity floor for --ci: critical or high")
 	asJSON := fs.Bool("json", false, "print the result as JSON instead of prose")
+	quiet := fs.Bool("quiet", false, "print nothing; the exit code is the answer")
+	fs.BoolVar(quiet, "q", false, "print nothing; the exit code is the answer")
 	apiKey := fs.String("api-key", "", "API key")
 	baseURL := fs.String("url", "", "API base URL")
 	timeout := fs.Int("timeout", 120, "seconds to wait")
@@ -105,8 +108,8 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.BoolVar(verbose, "v", false, "explain what was chosen")
 
 	// Flags may come before or after the path, which is what people expect.
-	path, rest := splitPath(argv)
-	if err := fs.Parse(rest); err != nil {
+	path, err := parseWithPath(fs, argv)
+	if err != nil {
 		return ExitError
 	}
 	if path == "" {
@@ -174,6 +177,17 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	}
 
 	blocking := result.BlockingAt(threshold)
+
+	// --quiet means the exit code is the whole answer. Useful in a pipeline
+	// step that only gates, and in a pre-commit hook where the scan is not the
+	// thing the developer is looking at. Errors still go to stderr: silencing
+	// "your key was rejected" would turn a broken setup into a passing build.
+	if *quiet {
+		if *ci && blocking > 0 {
+			return ExitFindings
+		}
+		return ExitOK
+	}
 
 	if *asJSON {
 		// The whole result, plus what this invocation decided about it. A
@@ -261,8 +275,8 @@ func runInit(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	baseURL := fs.String("url", "", "API base URL")
 	force := fs.Bool("force", false, "overwrite an existing file")
 
-	path, rest := splitPath(argv)
-	if err := fs.Parse(rest); err != nil {
+	path, err := parseWithPath(fs, argv)
+	if err != nil {
 		return ExitError
 	}
 	if path == "" {
@@ -328,37 +342,34 @@ func prompt(printer *ui.Printer, label string) string {
 	return strings.TrimSpace(line)
 }
 
-// splitPath separates a leading positional argument from the flags, so that
-// both `weedout scan ./app --ci` and `weedout scan --ci ./app` work.
-func splitPath(argv []string) (string, []string) {
+// parseWithPath parses flags that may appear either side of the path.
+//
+// Go's flag package stops at the first non-flag argument, so `weedout scan
+// ./app --ci` would leave --ci unparsed. Calling Parse repeatedly over what is
+// left is the standard way to allow interspersed arguments.
+//
+// This replaced a hand-written splitter that kept a list of which flags take a
+// value. That list was a standing bug: adding a flag and forgetting to list it
+// meant its value was silently taken as the path, and `weedout scan --fail-on
+// high` would have scanned a directory called "high". The flag set already
+// knows which flags take values, so asking it is both shorter and impossible
+// to get out of step.
+func parseWithPath(fs *flag.FlagSet, argv []string) (string, error) {
 	var path string
-	rest := make([]string, 0, len(argv))
-	for i := 0; i < len(argv); i++ {
-		arg := argv[i]
-		if strings.HasPrefix(arg, "-") {
-			rest = append(rest, arg)
-			// Flags that take a value, when written as `--flag value`.
-			if !strings.Contains(arg, "=") && takesValue(arg) && i+1 < len(argv) {
-				i++
-				rest = append(rest, argv[i])
-			}
-			continue
+	rest := argv
+
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return "", err
+		}
+		if fs.NArg() == 0 {
+			return path, nil
 		}
 		if path == "" {
-			path = arg
-			continue
+			path = fs.Arg(0)
 		}
-		rest = append(rest, arg)
+		rest = fs.Args()[1:]
 	}
-	return path, rest
-}
-
-func takesValue(flagArg string) bool {
-	switch strings.TrimLeft(flagArg, "-") {
-	case "api-key", "url", "timeout", "fail-on":
-		return true
-	}
-	return false
 }
 
 // report prints the result: counts first, then the findings worth acting on,
