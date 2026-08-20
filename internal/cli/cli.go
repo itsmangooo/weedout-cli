@@ -384,6 +384,9 @@ func report(printer *ui.Printer, result api.Result, manifest string, threshold a
 		printer.Line(printer.Green("  Nothing to act on."))
 	} else {
 		var parts []string
+		if n := result.Malicious(); n > 0 {
+			parts = append(parts, printer.Red(fmt.Sprintf("%d malicious", n)))
+		}
 		if n := result.Exploited(); n > 0 {
 			parts = append(parts, printer.Red(fmt.Sprintf("%d exploited", n)))
 		}
@@ -402,11 +405,15 @@ func report(printer *ui.Printer, result api.Result, manifest string, threshold a
 		printer.Line()
 		for _, f := range result.Findings {
 			marker := printer.Yellow(printer.Symbol("bullet"))
-			if f.Exploited {
+			if f.Exploited || f.Malicious {
 				marker = printer.Red(printer.Symbol("alert"))
 			}
 			fix := printer.Dim("no fix yet")
-			if f.FixedIn != "" {
+			if f.Malicious {
+				// Never "upgrade": a later release of a malicious package is
+				// just newer malware.
+				fix = printer.Red("remove it")
+			} else if f.FixedIn != "" {
 				fix = printer.Green(printer.Symbol("arrow") + " " + f.FixedIn)
 			}
 			printer.Line(fmt.Sprintf("  %s %s@%s  %s  %s",

@@ -47,6 +47,10 @@ type Finding struct {
 	CVE       string `json:"cve"`
 	Severity  string `json:"severity"`
 	Exploited bool   `json:"exploited"`
+	// Malicious is its own field rather than a severity value: a malicious
+	// package carries no CVSS score, so anything that ranks severities would
+	// sort the worst finding here below a medium.
+	Malicious bool   `json:"malicious"`
 	FixedIn   string `json:"fixed_in"`
 	Summary   string `json:"summary"`
 }
@@ -67,6 +71,10 @@ type Result struct {
 
 // Critical is the count of critical-severity findings.
 func (r Result) Critical() int { return r.Counts["critical"] }
+
+// Malicious is the count of dependencies that are malware rather than
+// packages with a vulnerability in them.
+func (r Result) Malicious() int { return r.Counts["malicious"] }
 
 // Exploited is the count of findings confirmed exploited in the wild.
 func (r Result) Exploited() int { return r.Counts["exploited"] }
@@ -98,10 +106,17 @@ func ParseThreshold(value string) (Threshold, error) {
 
 // Blocks reports whether one finding clears the threshold.
 //
-// Confirmed exploitation blocks at every threshold, whatever the CVSS score
-// says. A vulnerability with working public exploitation is not a medium
-// problem because a scoring rubric said so.
+// Confirmed exploitation and outright malware block at every threshold,
+// whatever the CVSS score says. A vulnerability with working public
+// exploitation is not a medium problem because a scoring rubric said so, and a
+// package that is malware is not a low one because nobody scored it at all.
 func (f Finding) Blocks(t Threshold) bool {
+	// Malware first, and at every threshold. A malicious package has no CVSS
+	// score, so a check that only reads severity lets the single worst thing
+	// this scanner can find straight through the gate.
+	if f.Malicious {
+		return true
+	}
 	if f.Exploited || f.Severity == "critical" {
 		return true
 	}

@@ -446,3 +446,89 @@ func TestJSONPrintsNothingButJSON(t *testing.T) {
 		t.Errorf("--json output is not exactly one JSON document:\n%s", out)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Malicious packages
+//
+// The regression these guard is specific and it was real: a malicious package
+// advisory carries no CVSS score, so every check that ranked severity let the
+// single worst finding this scanner can produce straight through the gate.
+// ---------------------------------------------------------------------------
+
+func maliciousResult() map[string]any {
+	return map[string]any{
+		"project": "demo", "actionable": 1,
+		// No severity, because OSV publishes none: there is nothing to score.
+		"counts": map[string]int{"malicious": 1, "unknown": 1},
+		"findings": []map[string]any{
+			{
+				"package": "umi-rujaksoto75-sluey", "version": "1.0.0",
+				"cve": "MAL-2025-137567", "severity": "unknown",
+				"exploited": false, "malicious": true, "fixed_in": "",
+			},
+		},
+	}
+}
+
+func TestCiFailsOnAMaliciousPackage(t *testing.T) {
+	server := serve(t, 200, maliciousResult())
+	code, out := run(t, "scan", project(t), "--ci", "--api-key", "k", "--url", server.URL)
+	if code != ExitFindings {
+		t.Fatalf("exit %d, want %d: malware must fail the build\n%s", code, ExitFindings, out)
+	}
+}
+
+func TestMalwareFailsEvenAtTheDefaultThreshold(t *testing.T) {
+	// --fail-on critical is the setting people leave on. A package that is
+	// malware has no severity at all, so it must not depend on the threshold.
+	server := serve(t, 200, maliciousResult())
+	code, _ := run(t, "scan", project(t), "--ci", "--fail-on", "critical",
+		"--api-key", "k", "--url", server.URL)
+	if code != ExitFindings {
+		t.Fatalf("exit %d, want %d at the default threshold", code, ExitFindings)
+	}
+}
+
+func TestMalwareIsNamedInTheOutput(t *testing.T) {
+	server := serve(t, 200, maliciousResult())
+	_, out := run(t, "scan", project(t), "--api-key", "k", "--url", server.URL)
+	if !strings.Contains(out, "malicious") {
+		t.Errorf("the summary should say what this is, got:\n%s", out)
+	}
+	if !strings.Contains(out, "remove it") {
+		t.Errorf("never tell somebody to upgrade malware; got:\n%s", out)
+	}
+}
+
+func TestMalwareIsCountedInTheJSON(t *testing.T) {
+	server := serve(t, 200, maliciousResult())
+	_, out := run(t, "scan", project(t), "--ci", "--json", "--api-key", "k", "--url", server.URL)
+
+	var report struct {
+		Blocking int  `json:"blocking"`
+		Failing  bool `json:"failing"`
+		Findings []struct {
+			Malicious bool `json:"malicious"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if report.Blocking != 1 || !report.Failing {
+		t.Errorf("blocking=%d failing=%v, want 1 and true", report.Blocking, report.Failing)
+	}
+	if len(report.Findings) != 1 || !report.Findings[0].Malicious {
+		t.Errorf("the malicious flag should survive into the JSON: %+v", report.Findings)
+	}
+}
+
+func TestAnOldClientStillSeesSomethingSane(t *testing.T) {
+	// `malicious` is its own field rather than a severity value, so a client
+	// that predates it reads severity "unknown" and exploited false instead of
+	// a level it cannot rank.
+	server := serve(t, 200, maliciousResult())
+	_, out := run(t, "scan", project(t), "--json", "--api-key", "k", "--url", server.URL)
+	if strings.Contains(out, `"severity": "malicious"`) {
+		t.Error("malicious leaked into the severity field")
+	}
+}
