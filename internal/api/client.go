@@ -71,15 +71,55 @@ func (r Result) Critical() int { return r.Counts["critical"] }
 // Exploited is the count of findings confirmed exploited in the wild.
 func (r Result) Exploited() int { return r.Counts["exploited"] }
 
-// Blocking is what --ci fails on: critical severity or confirmed exploitation.
+// Threshold is the severity floor --ci fails on.
+type Threshold string
+
+// The two that exist. Not every severity is offered: "fail on low" is a
+// setting nobody leaves switched on, and offering it invites a pipeline
+// configuration that gets disabled a week later rather than tuned.
+const (
+	// ThresholdCritical fails on critical severity or confirmed exploitation.
+	ThresholdCritical Threshold = "critical"
+	// ThresholdHigh additionally fails on high severity.
+	ThresholdHigh Threshold = "high"
+)
+
+// ParseThreshold maps a --fail-on value. The empty string means the default.
+func ParseThreshold(value string) (Threshold, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "critical":
+		return ThresholdCritical, nil
+	case "high":
+		return ThresholdHigh, nil
+	default:
+		return "", fmt.Errorf("unknown --fail-on value %q: use \"critical\" or \"high\"", value)
+	}
+}
+
+// Blocks reports whether one finding clears the threshold.
 //
-// Counted from the findings list rather than by adding two counters — a
-// finding that is both critical and exploited is one problem, and summing
+// Confirmed exploitation blocks at every threshold, whatever the CVSS score
+// says. A vulnerability with working public exploitation is not a medium
+// problem because a scoring rubric said so.
+func (f Finding) Blocks(t Threshold) bool {
+	if f.Exploited || f.Severity == "critical" {
+		return true
+	}
+	return t == ThresholdHigh && f.Severity == "high"
+}
+
+// Blocking is what --ci fails on at the default threshold.
+func (r Result) Blocking() int { return r.BlockingAt(ThresholdCritical) }
+
+// BlockingAt counts the findings that clear a threshold.
+//
+// Counted from the findings list rather than by adding the severity counters —
+// a finding that is both critical and exploited is one problem, and summing
 // would report it twice.
-func (r Result) Blocking() int {
+func (r Result) BlockingAt(t Threshold) int {
 	n := 0
 	for _, f := range r.Findings {
-		if f.Severity == "critical" || f.Exploited {
+		if f.Blocks(t) {
 			n++
 		}
 	}

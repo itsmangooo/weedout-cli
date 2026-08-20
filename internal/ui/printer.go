@@ -32,6 +32,13 @@ func New(out io.Writer) *Printer {
 	}
 }
 
+// Writer is the stream this Printer writes to.
+//
+// Exposed so a caller emitting something that is not prose -- JSON for a
+// pipeline to parse -- can write to the same place without a second handle on
+// stdout, and without going through the colouring helpers.
+func (p *Printer) Writer() io.Writer { return p.out }
+
 func useColour(out io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false

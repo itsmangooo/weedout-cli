@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -76,7 +77,9 @@ func usage(out io.Writer) {
   weedout version          print the version
 
 Scan flags:
-  --ci                     exit 1 if anything critical or actively exploited is found
+  --ci                     exit 1 if anything at or above --fail-on is found
+  --fail-on LEVEL          critical (default) or high
+  --json                   print the result as JSON instead of prose
   --api-key KEY            overrides $`+config.EnvAPIKey+`
   --url URL                API base URL (default: `+config.DefaultBaseURL+`)
   --timeout SECONDS        how long to wait (default: 120)
@@ -92,7 +95,9 @@ Exit codes:
 func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	ci := fs.Bool("ci", false, "exit 1 on critical or exploited findings")
+	ci := fs.Bool("ci", false, "exit 1 on findings at or above --fail-on")
+	failOn := fs.String("fail-on", "critical", "severity floor for --ci: critical or high")
+	asJSON := fs.Bool("json", false, "print the result as JSON instead of prose")
 	apiKey := fs.String("api-key", "", "API key")
 	baseURL := fs.String("url", "", "API base URL")
 	timeout := fs.Int("timeout", 120, "seconds to wait")
@@ -106,6 +111,14 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	}
 	if path == "" {
 		path = "."
+	}
+
+	// Checked before the scan rather than after. A typo in --fail-on must not
+	// cost a minute of CI and then report a threshold nobody asked for.
+	threshold, err := api.ParseThreshold(*failOn)
+	if err != nil {
+		printer.Line(printer.Red(err.Error()))
+		return ExitError
 	}
 
 	root, err := filepath.Abs(path)
@@ -160,15 +173,62 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitError
 	}
 
-	report(printer, result, manifest)
+	blocking := result.BlockingAt(threshold)
 
-	if *ci && result.Blocking() > 0 {
-		printer.Line(printer.Red(fmt.Sprintf(
-			"Failing: %d finding(s) at critical severity or confirmed exploitation.",
-			result.Blocking())))
+	if *asJSON {
+		// The whole result, plus what this invocation decided about it. A
+		// caller parsing this should not have to re-implement the threshold
+		// rule to find out whether the build is failing.
+		if err := writeJSON(printer.Writer(), result, threshold, blocking, *ci); err != nil {
+			fmt.Fprintf(stderr, "Could not encode the result: %v\n", err)
+			return ExitError
+		}
+	} else {
+		report(printer, result, manifest, threshold)
+	}
+
+	if *ci && blocking > 0 {
+		if !*asJSON {
+			printer.Line(printer.Red(fmt.Sprintf(
+				"Failing: %d finding(s) %s.", blocking, thresholdPhrase(threshold))))
+		}
 		return ExitFindings
 	}
 	return ExitOK
+}
+
+// thresholdPhrase names what was failed on, in words rather than a flag value.
+func thresholdPhrase(t api.Threshold) string {
+	if t == api.ThresholdHigh {
+		return "at high severity or above, or confirmed exploited"
+	}
+	return "at critical severity or confirmed exploitation"
+}
+
+// jsonReport is the machine-readable shape.
+//
+// A wrapper around the server's result rather than the result itself: the
+// decision (`failing`, `blocking`, `fail_on`) belongs to this invocation, not
+// to the scan, and flattening the two would make it impossible to tell a
+// server field from a client one.
+type jsonReport struct {
+	api.Result
+	FailOn   string `json:"fail_on"`
+	Blocking int    `json:"blocking"`
+	Failing  bool   `json:"failing"`
+}
+
+func writeJSON(out io.Writer, result api.Result, t api.Threshold, blocking int, ci bool) error {
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(jsonReport{
+		Result:   result,
+		FailOn:   string(t),
+		Blocking: blocking,
+		// Only --ci turns findings into a failure, so this reports what the
+		// exit code is about to be rather than what it might have been.
+		Failing: ci && blocking > 0,
+	})
 }
 
 // reportNothingFound names any lockfile that is present but unreadable by the
@@ -295,7 +355,7 @@ func splitPath(argv []string) (string, []string) {
 
 func takesValue(flagArg string) bool {
 	switch strings.TrimLeft(flagArg, "-") {
-	case "api-key", "url", "timeout":
+	case "api-key", "url", "timeout", "fail-on":
 		return true
 	}
 	return false
@@ -307,7 +367,7 @@ func takesValue(flagArg string) bool {
 // The suppressed count is shown deliberately. The number this product is proud
 // of is not how much it found, it is how much it decided not to interrupt
 // anyone about.
-func report(printer *ui.Printer, result api.Result, manifest string) {
+func report(printer *ui.Printer, result api.Result, manifest string, threshold api.Threshold) {
 	name := result.Project
 	if name == "" {
 		name = filepath.Base(manifest)

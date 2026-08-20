@@ -285,3 +285,164 @@ func TestInitRefusesToClobberWithoutForce(t *testing.T) {
 		t.Error("the existing key was overwritten without --force")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// --fail-on and --json — what the GitHub Action depends on
+// ---------------------------------------------------------------------------
+
+// highOnly is a scan whose worst finding is high severity and not exploited:
+// the one case the two thresholds disagree about.
+func highOnly() map[string]any {
+	return map[string]any{
+		"project": "demo", "actionable": 1,
+		"counts": map[string]int{"high": 1},
+		"findings": []map[string]any{
+			{"package": "acme", "version": "1.0.0", "cve": "CVE-1", "severity": "high", "fixed_in": "1.2.0"},
+		},
+	}
+}
+
+func TestDefaultThresholdIgnoresHigh(t *testing.T) {
+	server := serve(t, 200, highOnly())
+	code, out := run(t, "scan", project(t), "--ci", "--api-key", "k", "--url", server.URL)
+	if code != ExitOK {
+		t.Fatalf("exit %d, want %d: high must not fail at the default threshold\n%s",
+			code, ExitOK, out)
+	}
+}
+
+func TestFailOnHighFailsOnHigh(t *testing.T) {
+	server := serve(t, 200, highOnly())
+	code, out := run(t, "scan", project(t), "--ci", "--fail-on", "high",
+		"--api-key", "k", "--url", server.URL)
+	if code != ExitFindings {
+		t.Fatalf("exit %d, want %d with --fail-on high\n%s", code, ExitFindings, out)
+	}
+}
+
+func TestFailOnHighStillIgnoresMedium(t *testing.T) {
+	// The flag raises the floor to high; it is not "fail on anything".
+	server := serve(t, 200, map[string]any{
+		"project": "demo", "actionable": 1,
+		"counts": map[string]int{"medium": 1},
+		"findings": []map[string]any{
+			{"package": "acme", "version": "1.0.0", "severity": "medium"},
+		},
+	})
+	code, out := run(t, "scan", project(t), "--ci", "--fail-on", "high",
+		"--api-key", "k", "--url", server.URL)
+	if code != ExitOK {
+		t.Fatalf("exit %d, want %d: medium is below the high floor\n%s", code, ExitOK, out)
+	}
+}
+
+func TestFailOnHighWithoutCiStillExitsZero(t *testing.T) {
+	// --fail-on chooses the floor; --ci chooses whether it is fatal. Raising
+	// the floor must not start failing builds that never asked to be gated.
+	server := serve(t, 200, highOnly())
+	code, out := run(t, "scan", project(t), "--fail-on", "high",
+		"--api-key", "k", "--url", server.URL)
+	if code != ExitOK {
+		t.Fatalf("exit %d, want %d without --ci\n%s", code, ExitOK, out)
+	}
+}
+
+func TestUnknownFailOnValueExitsTwoBeforeScanning(t *testing.T) {
+	// Exit 2, not 1: a typo in the configuration did not find a vulnerability.
+	// And it must not reach the server, or a bad flag costs a minute of CI.
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	code, out := run(t, "scan", project(t), "--ci", "--fail-on", "medium",
+		"--api-key", "k", "--url", server.URL)
+	if code != ExitError {
+		t.Fatalf("exit %d, want %d for a bad --fail-on value\n%s", code, ExitError, out)
+	}
+	if reached {
+		t.Error("a bad --fail-on value reached the server; it should fail first")
+	}
+	if !strings.Contains(out, "critical") || !strings.Contains(out, "high") {
+		t.Errorf("the error should name the values that work, got:\n%s", out)
+	}
+}
+
+func TestJSONOutputIsParseableAndCarriesTheDecision(t *testing.T) {
+	server := serve(t, 200, highOnly())
+	code, out := run(t, "scan", project(t), "--ci", "--fail-on", "high", "--json",
+		"--api-key", "k", "--url", server.URL)
+	if code != ExitFindings {
+		t.Fatalf("exit %d, want %d\n%s", code, ExitFindings, out)
+	}
+
+	var report struct {
+		Project      string         `json:"project"`
+		FailOn       string         `json:"fail_on"`
+		Blocking     int            `json:"blocking"`
+		Failing      bool           `json:"failing"`
+		DashboardURL string         `json:"dashboard_url"`
+		Counts       map[string]int `json:"counts"`
+		Findings     []struct {
+			Package  string `json:"package"`
+			CVE      string `json:"cve"`
+			FixedIn  string `json:"fixed_in"`
+			Severity string `json:"severity"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("--json did not produce JSON: %v\n%s", err, out)
+	}
+
+	if report.FailOn != "high" {
+		t.Errorf("fail_on = %q, want high", report.FailOn)
+	}
+	if report.Blocking != 1 {
+		t.Errorf("blocking = %d, want 1", report.Blocking)
+	}
+	if !report.Failing {
+		t.Error("failing should be true: --ci was set and something blocked")
+	}
+	if len(report.Findings) != 1 || report.Findings[0].FixedIn != "1.2.0" {
+		t.Errorf("the findings should survive into the JSON, got %+v", report.Findings)
+	}
+}
+
+func TestJSONSaysNotFailingWithoutCi(t *testing.T) {
+	// `failing` reports what the exit code is about to be, not what it might
+	// have been under different flags. A summary that says "failing" beside a
+	// green tick is worse than no summary.
+	server := serve(t, 200, highOnly())
+	code, out := run(t, "scan", project(t), "--fail-on", "high", "--json",
+		"--api-key", "k", "--url", server.URL)
+	if code != ExitOK {
+		t.Fatalf("exit %d, want %d\n%s", code, ExitOK, out)
+	}
+
+	var report struct {
+		Blocking int  `json:"blocking"`
+		Failing  bool `json:"failing"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if report.Blocking != 1 {
+		t.Errorf("blocking = %d, want 1: the finding is still counted", report.Blocking)
+	}
+	if report.Failing {
+		t.Error("failing should be false without --ci")
+	}
+}
+
+func TestJSONPrintsNothingButJSON(t *testing.T) {
+	// The action pipes stdout straight into a parser. One stray line of prose
+	// and the step fails with a message about the wrong thing entirely.
+	server := serve(t, 200, highOnly())
+	_, out := run(t, "scan", project(t), "--json", "--api-key", "k", "--url", server.URL)
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		t.Errorf("--json output is not exactly one JSON document:\n%s", out)
+	}
+}
