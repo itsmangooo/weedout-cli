@@ -1,0 +1,10 @@
+{
+  "project": "acme-storefront",
+  "dependencies_scanned": 312,
+  "actionable": 3,
+  "suppressed": 47,
+  "counts": {"exploited": 0, "critical": 0, "high": 0, "medium": 3, "low": 1, "unknown": 0},
+  "findings": [],
+  "warnings": [],
+  "dashboard_url": "https://weedout.dev/targets/42"
+}

@@ -1,0 +1,131 @@
+name: Weedout Security Scan
+description: >-
+  Scan your dependencies for the CVEs that are actually exploited or actually
+  reachable, and fail the build only when something genuinely is.
+author: Weedout
+
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  api-key:
+    description: >-
+      A Weedout project API key. Pass it from a secret --
+      ${{ secrets.WEEDOUT_API_KEY }} -- never inline. The key decides which
+      project the scan belongs to, so there is nothing else to configure.
+    required: true
+
+  fail-on:
+    description: >-
+      The severity floor that fails the build: "critical" (also fails on
+      anything CISA lists as exploited in the wild) or "high". Confirmed
+      exploitation fails at either setting.
+    required: false
+    default: critical
+
+  path:
+    description: The directory to scan. Defaults to the repository root.
+    required: false
+    default: "."
+
+  version:
+    description: >-
+      Which CLI release to run, e.g. "v0.1.0". Defaults to the latest release.
+      Pin it if you want the scan to be reproducible.
+    required: false
+    default: latest
+
+  comment-on-pr:
+    description: >-
+      On a pull request, post the summary as a comment and update that same
+      comment on later runs. Needs pull-requests:write permission.
+    required: false
+    default: "true"
+
+  github-token:
+    description: Token used to post the pull request comment.
+    required: false
+    default: ${{ github.token }}
+
+  api-url:
+    description: The Weedout API base URL. Only useful for self-hosting.
+    required: false
+    default: https://weedout.dev
+
+outputs:
+  critical-count:
+    description: Open findings at critical severity.
+    value: ${{ steps.scan.outputs.critical-count }}
+  high-count:
+    description: Open findings at high severity.
+    value: ${{ steps.scan.outputs.high-count }}
+  exploited-count:
+    description: Open findings CISA lists as exploited in the wild.
+    value: ${{ steps.scan.outputs.exploited-count }}
+  blocking-count:
+    description: >-
+      Findings at or above `fail-on`. This is the number the exit code is
+      about to be decided by.
+    value: ${{ steps.scan.outputs.blocking-count }}
+  filtered-count:
+    description: >-
+      Advisories that matched your dependencies and were deliberately not
+      reported. Usually an order of magnitude larger than the rest.
+    value: ${{ steps.scan.outputs.filtered-count }}
+  findings-url:
+    description: Link to this project on the Weedout dashboard.
+    value: ${{ steps.scan.outputs.findings-url }}
+  result-json:
+    description: Path to the full scan result as JSON, for a later step to read.
+    value: ${{ steps.scan.outputs.result-json }}
+
+runs:
+  using: composite
+  steps:
+    # A pre-built binary, so the runner needs neither Go nor Python. `shell:
+    # bash` covers Windows too, via the Git Bash that every runner image ships.
+    - name: Install the Weedout CLI
+      shell: bash
+      run: "${GITHUB_ACTION_PATH}/action/install.sh"
+      env:
+        WEEDOUT_VERSION: ${{ inputs.version }}
+        # Only used to resolve the latest release tag through the API, which is
+        # rate limited hard for anonymous callers on busy runners.
+        GH_TOKEN: ${{ inputs.github-token }}
+
+    # Runs the scan and decides the exit code. Everything after this uses the
+    # JSON it wrote, so the project is scanned exactly once.
+    - name: Scan
+      id: scan
+      shell: bash
+      run: "${GITHUB_ACTION_PATH}/action/scan.sh"
+      env:
+        WEEDOUT_API_KEY: ${{ inputs.api-key }}
+        WEEDOUT_FAIL_ON: ${{ inputs.fail-on }}
+        WEEDOUT_PATH: ${{ inputs.path }}
+        WEEDOUT_API_URL: ${{ inputs.api-url }}
+
+    # `always()` on purpose: the summary matters most on the run that failed.
+    - name: Write the step summary
+      if: always() && steps.scan.outputs.result-json != ''
+      shell: bash
+      run: "${GITHUB_ACTION_PATH}/action/summary.sh"
+      env:
+        RESULT_JSON: ${{ steps.scan.outputs.result-json }}
+        WEEDOUT_FAIL_ON: ${{ inputs.fail-on }}
+
+    - name: Comment on the pull request
+      if: >-
+        always()
+        && steps.scan.outputs.result-json != ''
+        && inputs.comment-on-pr == 'true'
+        && github.event_name == 'pull_request'
+      shell: bash
+      run: "${GITHUB_ACTION_PATH}/action/comment.sh"
+      env:
+        RESULT_JSON: ${{ steps.scan.outputs.result-json }}
+        WEEDOUT_FAIL_ON: ${{ inputs.fail-on }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GH_REPO: ${{ github.repository }}

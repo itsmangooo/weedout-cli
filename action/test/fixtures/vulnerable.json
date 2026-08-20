@@ -1,0 +1,20 @@
+{
+  "project": "acme-storefront",
+  "manifest_changed": true,
+  "dependencies_scanned": 312,
+  "actionable": 8,
+  "suppressed": 47,
+  "new": 3,
+  "resolved": 0,
+  "counts": {"exploited": 1, "critical": 2, "high": 5, "medium": 3, "low": 0, "unknown": 0},
+  "findings": [
+    {"package": "systeminformation", "version": "5.0.0", "cve": "CVE-2021-21315",
+     "severity": "high", "exploited": true, "fixed_in": "5.3.1"},
+    {"package": "minimist", "version": "1.2.0", "cve": "CVE-2021-44906",
+     "severity": "critical", "exploited": false, "fixed_in": "1.2.6"},
+    {"package": "lodash", "version": "4.17.15", "cve": "CVE-2021-23337",
+     "severity": "high", "exploited": false, "fixed_in": ""}
+  ],
+  "warnings": [],
+  "dashboard_url": "https://weedout.dev/targets/42"
+}

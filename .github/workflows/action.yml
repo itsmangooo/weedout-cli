@@ -1,0 +1,148 @@
+# Two kinds of check, because they fail in different ways.
+#
+# `scripts` exercises the action's own logic against a mock API on all three
+# runner platforms. It needs no secret, so it runs on forks and on pull
+# requests from anyone.
+#
+# `live` runs the real action against a real project, which needs a real key.
+# It is skipped where the secret is not available rather than failing, because
+# a fork's pull request cannot have one and a red tick for that would be noise.
+name: action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: scripts on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The action ships pre-built binaries, but the test needs one before a
+      # release exists — and building from source here also catches the case
+      # where the CLI and the action disagree about the JSON shape.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      # From this checkout, so a change to the CLI and a change to the action
+      # are tested against each other rather than against the last release.
+      - name: Build the CLI from this checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -o "$RUNNER_TEMP/bin/weedout" .
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: End to end
+        shell: bash
+        run: ./action/test/e2e.sh
+
+  # The install path is the one thing the mock cannot cover: the real download,
+  # the real checksum, and the real binary for this platform.
+  install:
+    name: install on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify
+        shell: bash
+        run: ./action/install.sh
+        env:
+          GITHUB_ACTION_PATH: ${{ github.workspace }}
+          GH_TOKEN: ${{ github.token }}
+
+      - name: The binary runs
+        shell: bash
+        run: weedout version
+
+  live:
+    name: against a real project
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is a key available?
+        id: secret
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.WEEDOUT_API_KEY }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "No WEEDOUT_API_KEY; skipping the live scan." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # A lockfile with a known-vulnerable dependency, so this proves the
+      # action fails the build rather than only that it runs.
+      - name: A deliberately vulnerable project
+        if: steps.secret.outputs.available == 'true'
+        run: |
+          mkdir -p fixture
+          cat > fixture/package.json <<'EOF'
+          {
+            "name": "weedout-action-fixture",
+            "dependencies": {
+              "lodash": "4.17.15",
+              "minimist": "1.2.0"
+            }
+          }
+          EOF
+
+      - name: Scan it
+        id: scan
+        if: steps.secret.outputs.available == 'true'
+        continue-on-error: true
+        uses: ./
+        with:
+          api-key: ${{ secrets.WEEDOUT_API_KEY }}
+          path: fixture
+          fail-on: high
+
+      - name: It must have failed, and said why
+        if: steps.secret.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.scan.outcome }}" != "failure" ]; then
+            echo "::error::The scan passed on a project with known-vulnerable dependencies."
+            exit 1
+          fi
+
+          # outcome=failure covers both "found something" (1) and "could not
+          # run" (2), and those must never be confused. A real finding
+          # publishes counts; a failed scan publishes nothing.
+          blocking="${{ steps.scan.outputs.blocking-count }}"
+          if [ -z "$blocking" ]; then
+            echo "::error::The step failed without publishing counts, which means the scan did not run."
+            exit 1
+          fi
+          if [ "$blocking" -lt 1 ]; then
+            echo "::error::The step failed but reported $blocking blocking findings."
+            exit 1
+          fi
+
+          echo "Failed the build on $blocking finding(s), as it should."

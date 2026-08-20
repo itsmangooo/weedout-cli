@@ -1,0 +1,10 @@
+# Shell scripts must have LF endings wherever they are checked out.
+#
+# A .sh file with CRLF fails on Linux with "bad interpreter: /usr/bin/env
+# bash^M", which is a confusing way for a GitHub Action to break on the one
+# platform most people run it on. Relying on each contributor's core.autocrlf
+# is how that happens.
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
