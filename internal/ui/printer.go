@@ -6,6 +6,7 @@
 package ui
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -14,10 +15,23 @@ import (
 )
 
 // Printer writes coloured or plain output depending on where it is going.
+//
+// It also owns the input side, because the menu needs both and they have to
+// agree: a Printer reading from a string in a test must not try to put a
+// terminal that is not there into raw mode.
 type Printer struct {
 	out    io.Writer
 	colour bool
 	fancy  bool
+
+	// in is where keypresses and typed answers come from. Buffered once and
+	// kept, because the escape-sequence decoder relies on peeking at what is
+	// already buffered, and a fresh reader per keypress would discard it.
+	in *bufio.Reader
+	// inFile is the same stream as an *os.File when it is one, and nil when
+	// input has been substituted. Raw mode needs a real file descriptor, so a
+	// nil here is what routes a test to the typed-number menu.
+	inFile *os.File
 }
 
 // New builds a Printer for a stream.
@@ -29,7 +43,22 @@ func New(out io.Writer) *Printer {
 		out:    out,
 		colour: useColour(out),
 		fancy:  useUnicode(),
+		in:     bufio.NewReader(os.Stdin),
+		inFile: os.Stdin,
 	}
+}
+
+// WithInput returns a copy that reads from r instead of standard input.
+//
+// The copy has no *os.File, so it takes the typed-number path rather than
+// attempting raw mode. That is exactly the path worth testing: it is what runs
+// over a pipe, a serial console, and any platform without a raw-mode
+// implementation.
+func (p *Printer) WithInput(r io.Reader) *Printer {
+	clone := *p
+	clone.in = bufio.NewReader(r)
+	clone.inFile = nil
+	return &clone
 }
 
 // Writer is the stream this Printer writes to.
@@ -110,4 +139,53 @@ func (p *Printer) Line(text ...string) {
 		return
 	}
 	fmt.Fprintln(p.out, strings.Join(text, ""))
+}
+
+// IsTerminal reports whether a stream is a terminal rather than a pipe or file.
+func IsTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// CanPrompt reports whether it is safe to wait for a human.
+//
+// Both directions have to be a terminal. Output alone is not enough -- a
+// process reading from a pipe with its output on a screen would sit waiting
+// for a keypress that is never coming, which in a pipeline is a hung build
+// rather than an error anyone can read.
+//
+// CI is excluded outright, even when it does allocate a terminal, which some
+// runners do. A pipeline that pauses for input is broken regardless of whether
+// it technically could receive some.
+func CanPrompt() bool {
+	if InCI() {
+		return false
+	}
+	return IsTerminal(os.Stdin) && IsTerminal(os.Stdout)
+}
+
+// InCI reports whether this looks like an automated build.
+//
+// Checked by name against the variables the major systems set. There is no
+// standard for this, so the list is what it is; being wrong in the direction
+// of "assume CI" is the safe error, since the cost is a menu that does not
+// appear rather than a build that hangs.
+func InCI() bool {
+	for _, name := range []string{
+		"CI",               // GitHub Actions, GitLab, CircleCI, Travis
+		"BUILD_NUMBER",     // Jenkins, TeamCity
+		"TF_BUILD",         // Azure Pipelines
+		"BUILDKITE",        // Buildkite
+		"TEAMCITY_VERSION", // TeamCity
+		"bamboo_buildKey",  // Bamboo
+		"GITHUB_ACTIONS",   // belt and braces
+	} {
+		if os.Getenv(name) != "" {
+			return true
+		}
+	}
+	return false
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/itsmangooo/weedout-cli/internal/api"
 	"github.com/itsmangooo/weedout-cli/internal/config"
 	"github.com/itsmangooo/weedout-cli/internal/detect"
+	"github.com/itsmangooo/weedout-cli/internal/settings"
 	"github.com/itsmangooo/weedout-cli/internal/ui"
 )
 
@@ -47,6 +48,13 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	printer := ui.New(stdout)
 
 	if len(argv) == 0 {
+		// A bare `weedout` shows the menu only if this installation asked for
+		// it and there is somebody there to use it. Both halves matter: the
+		// setting alone would hang a pipeline, and a terminal alone would
+		// surprise everyone who never opted in.
+		if settings.Load().Interactive && ui.CanPrompt() {
+			return runMenu(printer, stdout, stderr)
+		}
 		usage(stdout)
 		return ExitError
 	}
@@ -56,6 +64,20 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		return runScan(argv[1:], printer, stderr)
 	case "init":
 		return runInit(argv[1:], printer, stderr)
+	case "status":
+		return runStatus(argv[1:], printer, stderr)
+	case "findings":
+		return runFindings(argv[1:], printer, stderr)
+	case "history":
+		return runHistory(argv[1:], printer, stderr)
+	case "supply-chain", "signals":
+		return runSupplyChain(argv[1:], printer, stderr)
+	case "rules":
+		return runRules(argv[1:], printer, stderr)
+	case "--interactive", "-i", "interactive":
+		return runInteractiveSetting(argv[1:], printer, stderr)
+	case "update", "upgrade", "self-update":
+		return runUpdate(argv[1:], printer, stderr)
 	case "version", "--version", "-version":
 		fmt.Fprintf(stdout, "weedout %s\n", Version)
 		return ExitOK
@@ -75,6 +97,19 @@ func usage(out io.Writer) {
   weedout scan [path]      scan a project (default: current directory)
   weedout init [path]      write a `+config.Filename+` config file
   weedout version          print the version
+  weedout --interactive    turn the menu on for this installation
+  weedout update           install the newest release
+
+Read your project without scanning it (needs a key with read access):
+  weedout status           counts, last check, next check
+  weedout findings         what is open, with fixes and how it got in
+  weedout history          recent scans and how the count has moved
+  weedout supply-chain     signals about the packages themselves
+
+Change what gets reported (needs a key with manage access):
+  weedout rules                        list the rules in force
+  weedout rules ignore ID --reason R   stop reporting one advisory
+  weedout rules unignore ID            report it again
 
 Scan flags:
   --ci                     exit 1 if anything at or above --fail-on is found
@@ -85,6 +120,12 @@ Scan flags:
   --url URL                API base URL (default: `+config.DefaultBaseURL+`)
   --timeout SECONDS        how long to wait (default: 120)
   -v, --verbose            show what was chosen and why
+
+Flags shared by the reading commands:
+  --json                   print JSON instead of prose
+  --api-key KEY            overrides $`+config.EnvAPIKey+`
+  --url URL                API base URL
+  --timeout SECONDS        how long to wait (default: 30)
 
 Exit codes:
   0  ran, nothing blocking
@@ -205,9 +246,12 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		if !*asJSON {
 			printer.Line(printer.Red(fmt.Sprintf(
 				"Failing: %d finding(s) %s.", blocking, thresholdPhrase(threshold))))
+			noticeIfUpdateAvailable(printer, *quiet, *asJSON)
 		}
 		return ExitFindings
 	}
+
+	noticeIfUpdateAvailable(printer, *quiet, *asJSON)
 	return ExitOK
 }
 

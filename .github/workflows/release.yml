@@ -95,13 +95,39 @@ jobs:
 
           echo "ARTIFACT=dist/${name}" >> "$GITHUB_ENV"
 
+      # A gzipped copy alongside the raw binary.
+      #
+      # The binary is around 6 MB and compresses to about 2.6 MB, and the CLI's
+      # self-updater prefers the smaller one -- compress/gzip is already linked
+      # into the binary through net/http, so decompressing costs nothing that
+      # has not already been paid for.
+      #
+      # The raw asset stays. install.sh and install.ps1 fetch it by name, and
+      # so does anything anyone has scripted themselves; replacing it rather
+      # than adding to it would break those for a download that is already
+      # only a few megabytes.
+      - name: Compress
+        run: |
+          set -euo pipefail
+          gzip -9 --keep --no-name "${ARTIFACT}"
+          ls -la dist
+
       # Checksums per artefact, concatenated into one file by the release step.
       # Published so an install script can verify what it downloaded rather
-      # than trusting the transport alone.
+      # than trusting the transport alone -- and so the self-updater can, which
+      # is the difference between an update mechanism and an arbitrary-code
+      # download. Both the raw and the compressed asset are covered, because
+      # whichever one is fetched is the one that has to be verified.
       - name: Checksum
         run: |
+          set -euo pipefail
           cd dist
-          sha256sum "$(basename "${ARTIFACT}")" > "$(basename "${ARTIFACT}").sha256"
+          for file in *; do
+            case "$file" in
+              *.sha256) continue ;;
+            esac
+            sha256sum "$file" > "$file.sha256"
+          done
 
       - uses: actions/upload-artifact@v4
         with:

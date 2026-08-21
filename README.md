@@ -52,11 +52,17 @@ weedout scan          # scan this project
 weedout scan --ci     # and fail the build on anything critical or exploited
 ```
 
-`weedout init` writes a `.weedout` file holding your key. **Add it to
-`.gitignore`** — the command says so too. In CI, skip it and set
-`WEEDOUT_API_KEY` instead: the environment always beats the file, so a key
-committed by accident can never quietly override the one your pipeline was
-configured with.
+Everything the dashboard shows is also here, so the web interface is optional:
+
+```sh
+weedout status        # counts, the severity breakdown, when it was last checked
+weedout findings      # what is open, with the fix and how it got into the tree
+weedout history       # recent scans, and how the count has moved
+weedout supply-chain  # signals about the packages themselves
+weedout rules         # what is being reported, and what is not
+```
+
+Add `--json` to any of them to get the same data as a machine-readable object.
 
 ### What it scans
 
@@ -105,6 +111,96 @@ Anywhere else, it is two lines:
     WEEDOUT_API_KEY: ${{ secrets.WEEDOUT_API_KEY }}
 ```
 
+## Keeping it current
+
+```sh
+weedout update           # check, confirm, install
+weedout update --check   # report only, install nothing
+weedout update --yes     # no confirmation, for a scripted upgrade
+```
+
+Updates come from this repository's GitHub Releases. What the updater will and
+will not do is worth stating plainly, because a tool that downloads a file and
+puts it where the operating system will run it is structurally a supply-chain
+risk, and this one is a security scanner:
+
+- **Nothing is installed without a matching SHA-256.** The digest comes from
+  the `checksums.txt` published with the release. If it cannot be fetched, or
+  does not match, the update fails and the binary on disk is left alone. There
+  is no path that skips this.
+- **HTTPS only, on every hop.** Redirects are followed, because release assets
+  are served from a CDN, but a redirect to plain HTTP or to a host outside
+  GitHub ends the attempt.
+- **Nothing is executed.** The new binary is verified, put in place, and left
+  for you to run.
+- **Never automatic.** There is no background updater. A dim one-line notice
+  appears at most once a day when a newer release exists; installing is
+  something you ask for.
+- **Never in CI.** The notice is suppressed in pipelines and with `--json` or
+  `--quiet`, and `weedout update` will not install without `--yes` when there
+  is nobody there to confirm. Pin a version in a pipeline: a build whose
+  scanner changes underneath it is no longer reproducible.
+- **A build you compiled yourself is never replaced.** `weedout version`
+  reporting `dev` means the updater leaves it alone.
+
+The replacement is a rename rather than a write over the running file, so an
+interrupted update leaves either the old binary or the new one and never half
+of either. On Windows the previous binary cannot be deleted while it is
+running, so it is renamed to `weedout.exe.old` and cleared on the next run.
+
+To turn the daily notice off:
+
+```
+update_checks = false
+```
+
+in the settings file described below.
+
+## Interactive mode
+
+```sh
+weedout --interactive          # turn the menu on for this installation
+weedout --interactive off      # turn it off
+weedout --interactive status   # report without changing anything
+```
+
+With it on, running `weedout` with no command gives an arrow-key menu of the
+commands that are safe to run with no arguments. Up and down to move, Enter to
+choose, `q` to cancel; `j`/`k` and the number keys work too. Where a terminal
+cannot be put into raw mode — a pipe, a serial console, a platform without an
+implementation — it degrades to a typed-number prompt rather than failing.
+
+It is **off by default and never appears in CI**, or when either input or
+output is not a terminal. A binary that waits for a keypress in a pipeline is a
+hung build, and that is a worse failure than a menu nobody sees.
+
+`weedout rules ignore` is deliberately not on the menu. It changes what the
+project will report from then on, and that should be typed out with its reason
+rather than reachable by pressing Enter twice.
+
+### Where the setting is stored
+
+Beside the executable, in `weedout.settings`, so a copy of the tool carries its
+own preferences and two copies on one machine do not fight over them.
+
+That directory is often read-only once installed — `/usr/local/bin`, Program
+Files, a container image layer. When it is, the file falls back to your user
+config directory, and the command tells you which one it used rather than
+silently forgetting the setting.
+
+It is the same flat `key = value` format as `.weedout`:
+
+```
+interactive = true
+update_checks = true
+```
+
+`weedout init` writes a `.weedout` file holding your key. **Add it to
+`.gitignore`** — the command says so too. In CI, skip it and set
+`WEEDOUT_API_KEY` instead: the environment always beats the file, so a key
+committed by accident can never quietly override the one your pipeline was
+configured with.
+
 ## Configuration
 
 Resolved highest-first:
@@ -115,6 +211,46 @@ Resolved highest-first:
 
 `--url` / `WEEDOUT_URL` points the CLI at a self-hosted instance.
 
+### Key scopes
+
+A key is issued for one project and with one of three scopes. Pick the
+narrowest that does the job:
+
+| Scope | Can | Use it for |
+|---|---|---|
+| **Push scans** | `weedout scan` | CI. This is the default. |
+| **Read findings** | `status`, `findings`, `history`, `supply-chain` | Dashboards, your terminal. |
+| **Full access** | all of the above, plus `rules` | A key you keep on your own machine. |
+
+The split matters because a key in a pipeline is readable by anyone who can
+read a build log. If that key could also add an ignore rule, whoever took it
+could switch off the alert for the vulnerability they were about to use. So the
+CI key cannot read your findings and cannot change your rules, and asking it to
+gets a clear refusal rather than a silent failure.
+
+Existing keys are push-only, which is what they already were — nothing widened
+when scopes arrived.
+
+### Changing what gets reported
+
+```sh
+weedout rules                                            # what is in force
+weedout rules ignore CVE-2021-23337 --reason "not reachable from our code"
+weedout rules unignore CVE-2021-23337
+```
+
+The reason is required. A rule with no reason is indistinguishable from a
+mistake when somebody reads it back in six months.
+
+An ignored advisory that later turns up on CISA's known-exploited list is
+reported anyway, and `weedout rules` marks it so you can see the rule stopped
+applying.
+
+For anything you want reviewed like code, prefer a `.weedout.yml` committed to
+the repo: it travels with the branch and goes through pull request. `weedout
+rules` lists what that file says separately from the rules stored on the
+server, so the two are never confused.
+
 ## Dependencies
 
 None. `go.mod` has no `require` block, and
@@ -124,8 +260,16 @@ listing packages by hand.
 Every dependency in a security tool is another thing you have to trust, and a
 CI runner is the last place that benefits from a dependency tree. The HTTP call
 is `net/http`, the parsing is `encoding/json`, the upload is `mime/multipart`,
-the arguments are `flag`, and the coloured output is about thirty lines of ANSI
-escapes.
+the arguments are `flag`, the update's integrity check is `crypto/sha256`, and
+the coloured output is about thirty lines of ANSI escapes.
+
+The arrow-key menu is the one place this costs something. Reading a keypress
+means putting the terminal into raw mode, which the standard library exposes
+only as raw syscalls — `golang.org/x/term` is the package everyone reaches for,
+and it would have been this module's only dependency. It is roughly eighty
+lines of `syscall` behind build tags instead, in `internal/ui/raw_*.go`. A tool
+whose whole pitch is that it takes your dependency tree seriously should not
+add a package to read an arrow key.
 
 ## Building
 
@@ -136,6 +280,33 @@ go build .
 
 Go 1.22 or newer. Releases are cross-compiled by GitHub Actions on a `v*` tag
 and published with checksums.
+
+### Size
+
+A plain `go build` produces a larger binary than a release does, because
+releases strip the symbol table and DWARF debug info:
+
+```sh
+go build -trimpath -ldflags "-s -w" .
+```
+
+| Build | Size |
+|---|---|
+| `go build` | 9.1 MB |
+| `-trimpath -ldflags "-s -w"` | 6.4 MB |
+| gzipped, as the updater downloads it | 2.7 MB |
+
+Most of what remains is the Go runtime and the TLS stack, and neither is
+optional for a static binary that makes an HTTPS request. There is no
+dependency tree to trim: `go.mod` has no `require` block, and every package
+linked in traces back to `net/http`.
+
+**Not UPX.** Compressing the executable would take it under 3 MB on disk, and
+it is the wrong trade here: packed binaries are a well-known malware technique,
+so antivirus and EDR products flag them heavily on reputation alone. A security
+scanner that its user's endpoint protection quarantines is worse than a
+security scanner that is 6 MB. The compression is applied to the download
+instead, where it costs nothing.
 
 ## As a GitHub Action
 

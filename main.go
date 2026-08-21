@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/itsmangooo/weedout-cli/internal/cli"
+	"github.com/itsmangooo/weedout-cli/internal/selfupdate"
 )
 
 func main() {
@@ -27,6 +28,11 @@ func main() {
 			os.Exit(cli.ExitError)
 		}
 	}()
+
+	// Clears the previous binary an update left behind. Windows cannot delete
+	// a running executable, so the update renames it aside and the next run --
+	// this one -- removes it. Silent and best-effort.
+	selfupdate.CleanUp()
 
 	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 }
