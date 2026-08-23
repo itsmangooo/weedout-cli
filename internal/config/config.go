@@ -25,8 +25,15 @@ import (
 )
 
 const (
-	// Filename is the per-project config file.
+	// Filename is the per-project config file. It holds a credential and must
+	// stay out of the repository.
 	Filename = ".weedout"
+
+	// PolicyFilename is the scan-rules file, which is the opposite: it belongs
+	// in the repository, where it is reviewed like code and travels with a
+	// branch. Two files with confusingly similar names, doing opposite things,
+	// so the distinction is stated wherever either one is mentioned.
+	PolicyFilename = ".weedout.yml"
 	// DefaultBaseURL is the hosted service.
 	DefaultBaseURL = "https://weedout.dev"
 
@@ -59,6 +66,35 @@ func FindFile(start string) (string, bool) {
 		candidate := filepath.Join(current, Filename)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return "", false
+}
+
+// FindPolicyFile returns the nearest .weedout.yml at or above start.
+//
+// The same upward walk as FindFile, and bounded the same way, because the two
+// files live in the same place for the same reason: the repository root, found
+// from wherever the command happened to be run.
+//
+// .weedout.yaml is accepted as well. Insisting on one spelling of a YAML
+// extension is a way to have people write a config that silently does nothing.
+func FindPolicyFile(start string) (string, bool) {
+	current, err := filepath.Abs(start)
+	if err != nil {
+		return "", false
+	}
+	for i := 0; i <= maxParents; i++ {
+		for _, name := range []string{PolicyFilename, ".weedout.yaml"} {
+			candidate := filepath.Join(current, name)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate, true
+			}
 		}
 		parent := filepath.Dir(current)
 		if parent == current {

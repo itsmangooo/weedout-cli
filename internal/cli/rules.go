@@ -156,7 +156,12 @@ func printPolicyFile(printer *ui.Printer, policy api.PolicyFile) {
 	printer.Line("  ", printer.Bold("From the repo"))
 
 	if !policy.Present {
-		printer.Line("    ", printer.Dim("No .weedout.yml. Run `weedout init` to write one."))
+		// Not `weedout init` -- that writes .weedout, which holds the key.
+		// Pointing somebody at the wrong file here is how a credential ends up
+		// committed.
+		printer.Line("    ", printer.Dim(
+			"No .weedout.yml. Write one beside your lockfile and commit it; "+
+				"the next scan sends it."))
 		printer.Line()
 		return
 	}

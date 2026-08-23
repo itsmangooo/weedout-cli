@@ -72,6 +72,8 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		return runHistory(argv[1:], printer, stderr)
 	case "supply-chain", "signals":
 		return runSupplyChain(argv[1:], printer, stderr)
+	case "profiles", "profile":
+		return runProfiles(argv[1:], printer, stderr)
 	case "rules":
 		return runRules(argv[1:], printer, stderr)
 	case "--interactive", "-i", "interactive":
@@ -105,6 +107,7 @@ Read your project without scanning it (needs a key with read access):
   weedout findings         what is open, with fixes and how it got in
   weedout history          recent scans and how the count has moved
   weedout supply-chain     signals about the packages themselves
+  weedout profiles         the account's rule profiles, and which applies here
 
 Change what gets reported (needs a key with manage access):
   weedout rules                        list the rules in force
@@ -121,6 +124,7 @@ Scan flags:
   --api-key KEY            overrides $`+config.EnvAPIKey+`
   --url URL                API base URL (default: `+config.DefaultBaseURL+`)
   --timeout SECONDS        how long to wait (default: 120)
+  --profile NAME           scan under one of the account's rule profiles
   -v, --verbose            show what was chosen and why
 
 Flags shared by the reading commands:
@@ -149,6 +153,7 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	timeout := fs.Int("timeout", 120, "seconds to wait")
 	verbose := fs.Bool("verbose", false, "explain what was chosen")
 	fs.BoolVar(verbose, "v", false, "explain what was chosen")
+	profile := fs.String("profile", "", "which rule profile to scan under")
 
 	// Flags may come before or after the path, which is what people expect.
 	path, err := parseWithPath(fs, argv)
@@ -205,13 +210,30 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitError
 	}
 
+	// Rules that live in the repository, sent with the scan. The server never
+	// sees the checkout, so a .weedout.yml nobody uploads is a file that does
+	// nothing -- which is what it was until this looked for one.
+	policyPath, hasPolicy := config.FindPolicyFile(searchRoot)
+
 	if *verbose {
 		printer.Line(printer.Dim("Scanning " + manifest))
 		printer.Line(printer.Dim("Key from " + cfg.KeySource))
 		printer.Line(printer.Dim("Endpoint " + cfg.BaseURL))
+		if hasPolicy {
+			printer.Line(printer.Dim("Rules from " + policyPath))
+		} else {
+			printer.Line(printer.Dim("No " + config.PolicyFilename + " found"))
+		}
+		if *profile != "" {
+			printer.Line(printer.Dim("Profile " + *profile))
+		}
 	}
 
-	result, err := api.PostScan(cfg.BaseURL, cfg.APIKey, manifest, time.Duration(*timeout)*time.Second)
+	result, err := api.PostScanRequest(cfg.BaseURL, cfg.APIKey, api.ScanRequest{
+		ManifestPath: manifest,
+		PolicyPath:   policyPath,
+		Profile:      *profile,
+	}, time.Duration(*timeout)*time.Second)
 	if err != nil {
 		printer.Line(printer.Red(err.Error()))
 		// Always 2. A scan that could not run is not a scan that found nothing,

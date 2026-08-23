@@ -150,7 +150,35 @@ func (r Result) BlockingAt(t Threshold) int {
 const MaxManifestBytes = 5 << 20
 
 // PostScan uploads a manifest and returns the parsed result.
+// ScanRequest is everything one scan sends beyond the key.
+//
+// A struct rather than four positional arguments: the last two are both
+// optional strings, and a call site that swapped them would compile.
+type ScanRequest struct {
+	// ManifestPath is the lockfile to scan. Required.
+	ManifestPath string
+	// PolicyPath is a .weedout.yml found beside it, or "" if there is none.
+	//
+	// The server never sees the repository, only what is uploaded, so the
+	// rules have to travel with the scan. That is also what makes CI the
+	// source of truth: the file that ran in the pipeline is the file that
+	// applied.
+	PolicyPath string
+	// Profile names one of the account's rule profiles, or "" to let the
+	// server decide from the project and the account default. Resolved
+	// server-side -- a name that does not exist fails the scan rather than
+	// quietly running on the defaults.
+	Profile string
+}
+
 func PostScan(baseURL, apiKey, path string, timeout time.Duration) (Result, error) {
+	return PostScanRequest(baseURL, apiKey, ScanRequest{ManifestPath: path}, timeout)
+}
+
+func PostScanRequest(
+	baseURL, apiKey string, req ScanRequest, timeout time.Duration,
+) (Result, error) {
+	path := req.ManifestPath
 	info, err := os.Stat(path)
 	if err != nil {
 		return Result{}, &Error{
@@ -184,6 +212,22 @@ func PostScan(baseURL, apiKey, path string, timeout time.Duration) (Result, erro
 	if _, err := part.Write(content); err != nil {
 		return Result{}, &Error{Message: err.Error(), Code: "encode_failed"}
 	}
+	if req.PolicyPath != "" {
+		// Read failures are not fatal here. A .weedout.yml that cannot be read
+		// means the scan runs on the defaults, which can only produce more
+		// alerts than intended -- and failing the pipeline over a file the
+		// caller may not know exists would be the worse trade.
+		if policy, err := os.ReadFile(req.PolicyPath); err == nil {
+			if part, err := writer.CreateFormFile("policy", filepath.Base(req.PolicyPath)); err == nil {
+				_, _ = part.Write(policy)
+			}
+		}
+	}
+
+	if req.Profile != "" {
+		_ = writer.WriteField("profile", req.Profile)
+	}
+
 	if err := writer.Close(); err != nil {
 		return Result{}, &Error{Message: err.Error(), Code: "encode_failed"}
 	}

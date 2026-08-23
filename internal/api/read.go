@@ -149,6 +149,35 @@ type Rules struct {
 	PolicyFile PolicyFile `json:"policy_file"`
 }
 
+// Profile is one named rule set on the account.
+type Profile struct {
+	Name string `json:"name"`
+	// Slug is what --profile matches. Given by the server so nobody has to
+	// reproduce the normalisation by guesswork.
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	IsDefault   bool   `json:"is_default"`
+	// InUseHere is set when this project chose the profile explicitly, which
+	// is a different thing from inheriting the account default.
+	InUseHere bool   `json:"in_use_here"`
+	Document  string `json:"document"`
+}
+
+// Profiles is the account's rule profiles and which one applies here.
+type Profiles struct {
+	Profiles []Profile `json:"profiles"`
+	// AppliesHere is what a scan with no --profile would run under. Empty when
+	// the account has neither a choice on this project nor a default.
+	AppliesHere string `json:"applies_here"`
+}
+
+// GetProfiles fetches the account's rule profiles.
+func GetProfiles(baseURL, apiKey string, timeout time.Duration) (Profiles, error) {
+	var out Profiles
+	err := call(baseURL, apiKey, http.MethodGet, "/api/v1/profiles", nil, timeout, &out)
+	return out, err
+}
+
 // GetStatus fetches the project overview.
 func GetStatus(baseURL, apiKey string, timeout time.Duration) (Status, error) {
 	var out Status
