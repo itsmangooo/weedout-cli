@@ -109,6 +109,8 @@ Read your project without scanning it (needs a key with read access):
 Change what gets reported (needs a key with manage access):
   weedout rules                        list the rules in force
   weedout rules ignore ID --reason R   stop reporting one advisory
+  weedout rules ignore --package P --reason R
+                                       stop reporting a family of packages
   weedout rules unignore ID            report it again
 
 Scan flags:

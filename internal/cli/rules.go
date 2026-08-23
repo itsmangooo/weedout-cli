@@ -48,9 +48,15 @@ func runRules(argv []string, printer *ui.Printer, stderr io.Writer) int {
 func rulesUsage(out io.Writer) {
 	fmt.Fprint(out, `weedout rules — what this project reports, and what it does not.
 
-  weedout rules                       list the rules in force
-  weedout rules ignore ID --reason R  stop reporting one advisory
-  weedout rules unignore ID           report it again
+  weedout rules                             list the rules in force
+  weedout rules ignore ID --reason R        stop reporting one advisory
+  weedout rules ignore --package P --reason R
+                                            stop reporting a family of packages
+  weedout rules unignore ID                 report it again
+
+A package rule takes a glob: --package "@acme/*" covers every advisory written
+about anything in that scope, including ones published after you write it. Quote
+it, or your shell will expand it against the working directory.
 
 Needs a key with manage access. A CI key cannot change rules.
 `)
@@ -115,7 +121,14 @@ func printRules(printer *ui.Printer, rules api.Rules) {
 		printer.Line("    ", printer.Dim("Nothing. Every advisory that matches is reported."))
 	}
 	for _, ignore := range rules.Ignores {
-		printer.Line("    ", printer.Bold(ignore.Identifier), "  ",
+		suffix := ""
+		if ignore.Kind == "package" {
+			// Said out loud, because the two read very differently. An id
+			// names one advisory; a glob names a family of packages and every
+			// advisory that will ever be written about them.
+			suffix = "  " + printer.Dim("(every advisory)")
+		}
+		printer.Line("    ", printer.Bold(ignore.Identifier), suffix, "  ",
 			printer.Dim(truncate(ignore.Reason, 56)))
 
 		detail := ignore.CreatedBy
@@ -161,9 +174,12 @@ func printPolicyFile(printer *ui.Printer, policy api.PolicyFile) {
 
 	printer.Line("    ", printer.Dim(fmt.Sprintf(
 		".weedout.yml, %d ignore rule(s), read %s",
-		len(policy.Ignores), relative(policy.UpdatedAt))))
+		len(policy.Ignores)+len(policy.IgnoredPackages), relative(policy.UpdatedAt))))
 	for _, id := range policy.Ignores {
 		printer.Line("      ", printer.Dim(id))
+	}
+	for _, pattern := range policy.IgnoredPackages {
+		printer.Line("      ", printer.Dim(pattern+"  (every advisory)"))
 	}
 	printer.Line()
 }
@@ -177,13 +193,15 @@ func runRulesIgnore(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	flags := addCommonFlags(fs)
 	reason := fs.String("reason", "", "why this is being ignored (required)")
+	pkg := fs.String("package", "", "a package name or glob, instead of an advisory id")
 
-	identifier, err := parseWithPath(fs, argv)
+	positional, err := parseWithPath(fs, argv)
 	if err != nil {
 		return ExitError
 	}
-	if identifier == "" {
-		printer.Line(printer.Red("Which advisory? Pass one, like CVE-2021-23337."))
+
+	identifier, kind, ok := ignoreSubject(positional, *pkg, printer)
+	if !ok {
 		return ExitError
 	}
 
@@ -193,8 +211,7 @@ func runRulesIgnore(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		// error. A rule with no reason is indistinguishable from a mistake
 		// when somebody reads it back in six months.
 		printer.Line(printer.Red("A reason is required."))
-		printer.Line(printer.Dim(fmt.Sprintf(
-			"  weedout rules ignore %s --reason \"not reachable from our code\"", identifier)))
+		printer.Line(printer.Dim(ignoreExample(identifier, kind)))
 		return ExitError
 	}
 
@@ -203,27 +220,70 @@ func runRulesIgnore(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitError
 	}
 
-	if err := api.AddIgnore(cfg.BaseURL, cfg.APIKey, identifier, *reason, flags.wait()); err != nil {
+	err = api.AddIgnore(cfg.BaseURL, cfg.APIKey, identifier, kind, *reason, flags.wait())
+	if err != nil {
 		return fail(printer, err)
 	}
 
-	printer.Line(printer.Green(identifier + " will no longer be reported for this project."))
+	if kind == "package" {
+		printer.Line(printer.Green(
+			"Advisories about " + identifier + " will no longer be reported for this project."))
+	} else {
+		printer.Line(printer.Green(identifier + " will no longer be reported for this project."))
+	}
 	printer.Line(printer.Dim(
-		"If it turns up on the known-exploited list, it will be reported again anyway."))
+		"Anything on the known-exploited list, or flagged as malware, is reported anyway."))
 	return ExitOK
+}
+
+// ignoreSubject decides what this rule is about, and refuses the ambiguous case.
+//
+// Passing both an id and --package has no single reading, and guessing would
+// silence something the caller did not ask to silence.
+func ignoreSubject(positional, pkg string, printer *ui.Printer) (string, string, bool) {
+	pattern := strings.TrimSpace(pkg)
+
+	switch {
+	case positional != "" && pattern != "":
+		printer.Line(printer.Red("Pass an advisory id or --package, not both."))
+		return "", "", false
+	case pattern != "":
+		return pattern, "package", true
+	case positional != "":
+		return positional, "advisory", true
+	default:
+		printer.Line(printer.Red("Which advisory? Pass one, like CVE-2021-23337."))
+		printer.Line(printer.Dim(
+			"  Or --package \"@acme/*\" to cover a family of packages."))
+		return "", "", false
+	}
+}
+
+func ignoreExample(identifier, kind string) string {
+	if kind == "package" {
+		return fmt.Sprintf(
+			"  weedout rules ignore --package %q --reason \"internal mirror of a public name\"",
+			identifier)
+	}
+	return fmt.Sprintf(
+		"  weedout rules ignore %s --reason \"not reachable from our code\"", identifier)
 }
 
 func runRulesUnignore(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rules unignore", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	flags := addCommonFlags(fs)
+	pkg := fs.String("package", "", "a package name or glob, instead of an advisory id")
 
-	identifier, err := parseWithPath(fs, argv)
+	positional, err := parseWithPath(fs, argv)
 	if err != nil {
 		return ExitError
 	}
-	if identifier == "" {
-		printer.Line(printer.Red("Which advisory? Pass one, like CVE-2021-23337."))
+
+	// The server removes a rule by what it names, whichever kind it is, so
+	// --package is accepted here only for symmetry with `ignore`.
+	identifier, _, ok := ignoreSubject(positional, *pkg, printer)
+	if !ok {
 		return ExitError
 	}
 

@@ -112,9 +112,12 @@ type SupplyChain struct {
 // Ignore is one advisory this project has been told to skip.
 type Ignore struct {
 	Identifier string `json:"identifier"`
-	Reason     string `json:"reason"`
-	CreatedBy  string `json:"created_by"`
-	CreatedAt  string `json:"created_at"`
+	// "advisory" or "package". Absent on a server that predates package
+	// rules, which means advisory — the same default the server applies.
+	Kind      string `json:"kind"`
+	Reason    string `json:"reason"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt string `json:"created_at"`
 	// Set when a KEV listing set the rule aside. A rule that stopped applying
 	// is worth saying out loud, because somebody wrote it expecting silence.
 	OverriddenAt string `json:"overridden_at"`
@@ -126,6 +129,10 @@ type PolicyFile struct {
 	UpdatedAt string   `json:"updated_at"`
 	Error     string   `json:"error"`
 	Ignores   []string `json:"ignores"`
+	// Package globs from the same file. Listed separately because they read
+	// differently: an id names one advisory, a glob names a family of packages
+	// and every advisory that will ever be written about them.
+	IgnoredPackages []string `json:"ignored_packages"`
 }
 
 // Thresholds are the per-project severity floors.
@@ -183,8 +190,17 @@ func GetRules(baseURL, apiKey string, timeout time.Duration) (Rules, error) {
 //
 // The reason is required by the server, and that is worth keeping: an ignore
 // rule with no reason is indistinguishable from a mistake six months later.
-func AddIgnore(baseURL, apiKey, identifier, reason string, timeout time.Duration) error {
-	body, err := json.Marshal(map[string]string{"identifier": identifier, "reason": reason})
+// kind is "advisory" or "package". It is always sent, so the server never has
+// to infer which was meant from the shape of the identifier.
+func AddIgnore(baseURL, apiKey, identifier, kind, reason string, timeout time.Duration) error {
+	if kind == "" {
+		kind = "advisory"
+	}
+	body, err := json.Marshal(map[string]string{
+		"identifier": identifier,
+		"kind":       kind,
+		"reason":     reason,
+	})
 	if err != nil {
 		return &Error{Message: err.Error(), Code: "encode_failed"}
 	}
