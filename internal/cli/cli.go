@@ -72,6 +72,20 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		return runHistory(argv[1:], printer, stderr)
 	case "supply-chain", "signals":
 		return runSupplyChain(argv[1:], printer, stderr)
+	case "auth", "login":
+		return runAuth(argv[1:], printer, stderr)
+	case "logout":
+		return runLogout(argv[1:], printer, stderr)
+	case "whoami":
+		return runWhoami(argv[1:], printer, stderr)
+	case "link":
+		return runLink(argv[1:], printer, stderr)
+	case "create":
+		return runCreate(argv[1:], printer, stderr)
+	case "unlink":
+		return runUnlink(argv[1:], printer, stderr)
+	case "key", "keys":
+		return runKey(argv[1:], printer, stderr)
 	case "profiles", "profile":
 		return runProfiles(argv[1:], printer, stderr)
 	case "rules":
@@ -96,11 +110,20 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 func usage(out io.Writer) {
 	fmt.Fprint(out, `weedout — scan your dependencies for the CVEs that actually matter.
 
+  weedout auth             sign this machine in, by confirming in a browser
+  weedout create [name]    make a project here and save a key for it
+  weedout link             connect this directory to a project you already have
   weedout scan [path]      scan a project (default: current directory)
-  weedout init [path]      write a `+config.Filename+` config file
+  weedout whoami           which account, and what this directory is linked to
   weedout version          print the version
   weedout --interactive    turn the menu on for this installation
   weedout update           install the newest release
+
+Managing this machine:
+  weedout logout           forget the credential here (--all drops project keys)
+  weedout unlink           forget which project this directory belongs to
+  weedout key regenerate   replace this directory's key with a fresh one
+  weedout init [path]      write a `+config.Filename+` file, for CI or a shared box
 
 Read your project without scanning it (needs a key with read access):
   weedout status           counts, last check, next check

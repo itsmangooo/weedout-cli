@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/itsmangooo/weedout-cli/internal/api"
+	"github.com/itsmangooo/weedout-cli/internal/globalconfig"
 	"time"
 )
 
@@ -44,6 +45,35 @@ func project(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// isolateConfig points the global config at a temporary directory.
+//
+// Every test in this package gets it, through TestMain. Without it a test run
+// would read whatever `weedout auth` left on the developer's own machine --
+// which means a suite that passes on a laptop and fails in CI, or worse, one
+// that quietly authenticates against somebody's real account.
+func isolateConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv(globalconfig.EnvConfigHome, dir)
+	return dir
+}
+
+func TestMain(m *testing.M) {
+	// Set for the whole run, not per test, because `config.Resolve` reads it
+	// from any goroutine and t.Setenv cannot cover code reached before a test
+	// starts.
+	home, err := os.MkdirTemp("", "weedout-test-config-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv(globalconfig.EnvConfigHome, home)
+
+	code := m.Run()
+
+	_ = os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func run(t *testing.T, args ...string) (int, string) {

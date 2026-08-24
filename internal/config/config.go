@@ -5,12 +5,25 @@
 //  1. --api-key on the command line
 //  2. WEEDOUT_API_KEY in the environment
 //  3. api_key in a .weedout file, searched from the working directory upward
+//  4. the key `weedout link` stored for this directory, in the global config
 //
-// The environment beating the file is the important one. CI systems inject
+// The environment beating both files is the important one. CI systems inject
 // secrets as environment variables, and a .weedout accidentally committed to
 // the repository must never quietly override the key the pipeline was
 // configured with — a build that authenticates as the wrong account is far
 // worse than one that fails to authenticate at all.
+//
+// The repository file beating the global map is the next one, and for a
+// smaller reason: somebody who put a key next to their code meant that key.
+// The global map is the fallback that makes the common case need no setup at
+// all, which is what it is for.
+//
+// The two files are for different jobs. .weedout holds a credential inside a
+// working tree, one .gitignore mistake from being published, and has to be
+// recreated in every checkout — fine as the local equivalent of the CI
+// environment variable, bad as a developer's configuration. The global config
+// lives where the operating system puts configuration, holds one entry per
+// repository path, and is written by `weedout auth` and `weedout link`.
 //
 // .weedout is a flat key = value file rather than TOML or YAML: it holds two
 // settings, and depending on a parser to read them would put a dependency in a
@@ -22,6 +35,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/itsmangooo/weedout-cli/internal/globalconfig"
 )
 
 const (
@@ -144,6 +159,11 @@ func Resolve(start, cliKey, cliURL string, env Lookup) Config {
 		fileValues = ReadFile(configPath)
 	}
 
+	// The global config, if this directory has been linked. Read last and
+	// used last: it is the fallback, not the answer.
+	global, _ := globalconfig.Load()
+	linked, linkedAt, isLinked := global.ProjectFor(start)
+
 	var apiKey, source string
 	switch {
 	case cliKey != "":
@@ -152,6 +172,8 @@ func Resolve(start, cliKey, cliURL string, env Lookup) Config {
 		apiKey, source = env(EnvAPIKey), EnvAPIKey
 	case fileValues["api_key"] != "":
 		apiKey, source = fileValues["api_key"], configPath
+	case isLinked && linked.Key != "":
+		apiKey, source = linked.Key, fmt.Sprintf("%s linked to %s", linkedAt, linked.Name)
 	default:
 		apiKey, source = "", "nowhere"
 	}
@@ -161,6 +183,7 @@ func Resolve(start, cliKey, cliURL string, env Lookup) Config {
 		env(EnvBaseURL),
 		fileValues["url"],
 		fileValues["base_url"],
+		global.BaseURL,
 		DefaultBaseURL,
 	)
 
