@@ -47,10 +47,20 @@ windows/amd64.
 ## Use
 
 ```sh
-weedout init          # save your API key to .weedout
+weedout auth          # sign this machine in, by confirming a code in a browser
+weedout create        # make a project from this directory, and save a key here
 weedout scan          # scan this project
 weedout scan --ci     # and fail the build on anything critical or exploited
 ```
+
+`weedout auth` prints an eight-character code and opens your browser. You check
+the page shows the same code and approve; the credential goes straight to a
+file only your account can read, and is never printed. Nothing is copied or
+pasted at any point, which is the reason it works this way — a token you paste
+is a token in your clipboard, your shell history and your scrollback.
+
+If the project already exists, `weedout link` connects to it instead of
+`weedout create`.
 
 Everything the dashboard shows is also here, so the web interface is optional:
 
@@ -59,10 +69,47 @@ weedout status        # counts, the severity breakdown, when it was last checked
 weedout findings      # what is open, with the fix and how it got into the tree
 weedout history       # recent scans, and how the count has moved
 weedout supply-chain  # signals about the packages themselves
+weedout profiles      # the rule profiles on the account, and which applies here
 weedout rules         # what is being reported, and what is not
 ```
 
 Add `--json` to any of them to get the same data as a machine-readable object.
+
+### Managing this machine
+
+```sh
+weedout whoami          # which account, and what this directory is linked to
+weedout link            # connect this directory to an existing project
+weedout unlink          # forget the association. Does not revoke the key
+weedout key regenerate  # replace this directory's key; the old one keeps working
+weedout logout          # forget the credential here. --all drops project keys too
+```
+
+One `weedout auth` covers every checkout on the machine. `weedout link` records
+each project against the directory's absolute path in a single config file, so
+eight repositories need eight `link`s and no dotfiles. The lookup walks upward
+and the deepest match wins, so a monorepo root and a service directory can
+point at different projects.
+
+`weedout logout` only forgets the local copy. Sign the machine out under
+**Signed-in machines** in your account settings if it is out of your hands.
+
+### Two credentials, and neither is the other
+
+|  | Machine credential | Project key |
+|---|---|---|
+| From | `weedout auth` | `weedout create`, `weedout link`, or the dashboard |
+| Belongs to | your account | one project |
+| Lives | your OS config directory | `WEEDOUT_API_KEY`, or a `.weedout` file |
+| Can | create projects, list them, issue keys | scan, read findings, edit rules — by scope |
+| **Cannot** | **read a single finding** | **reach another project** |
+
+A key taken from a CI runner reaches the one project that runner builds. A
+credential taken from a laptop can make projects and cannot see what you are
+vulnerable to. Both are worth revoking quickly; neither is everything.
+
+A pipeline has no browser, so it uses a project key in `WEEDOUT_API_KEY` — see
+[In CI](#in-ci) below.
 
 ### What it scans
 
@@ -208,8 +255,50 @@ Resolved highest-first:
 1. `--api-key` on the command line
 2. `WEEDOUT_API_KEY` in the environment
 3. `api_key` in a `.weedout` file, searched from the working directory upward
+4. the key `weedout link` stored for this directory, in the global config
+
+The environment beating both files is the one that matters. CI injects secrets
+as environment variables, and a `.weedout` accidentally committed to a
+repository must never quietly override the key a pipeline was configured with —
+a build that authenticates as the wrong account is worse than one that fails to
+authenticate at all.
+
+The repository file beating the global map is the smaller rule: somebody who
+put a key next to their code meant that key.
 
 `--url` / `WEEDOUT_URL` points the CLI at a self-hosted instance.
+
+### Where the global config lives
+
+`weedout auth` and `weedout link` write to the directory the operating system
+designates for configuration:
+
+| | |
+|---|---|
+| Linux | `~/.config/weedout/config.json` |
+| macOS | `~/Library/Application Support/weedout/config.json` |
+| Windows | `%AppData%\weedout\config.json` |
+
+`0600` inside a `0700` directory, written through a temporary file and renamed
+— a crash mid-write must not leave a truncated config, because that would lose
+every project key on the machine and look like being signed out for no reason.
+
+`weedout whoami` prints the path it read.
+
+### Scan rules travel with the scan
+
+A `.weedout.yml` beside your lockfile, or up to six directories above it, is
+uploaded with every scan. `.weedout.yaml` works too. The server never sees your
+repository — only what is uploaded — so the rules have to travel with the scan,
+and that is also what makes CI the source of truth: the file that ran in the
+pipeline is the file that applied.
+
+`.weedout` and `.weedout.yml` are different files doing opposite things. The
+first holds a credential and must stay out of the repository; the second holds
+your rules and belongs in it.
+
+Run `weedout scan --verbose` to see which one was found, which key was used and
+which profile applied.
 
 ### Key scopes
 
@@ -219,8 +308,11 @@ narrowest that does the job:
 | Scope | Can | Use it for |
 |---|---|---|
 | **Push scans** | `weedout scan` | CI. This is the default. |
-| **Read findings** | `status`, `findings`, `history`, `supply-chain` | Dashboards, your terminal. |
+| **Read findings** | `status`, `findings`, `history`, `supply-chain`, `profiles` | Dashboards, your terminal. |
 | **Full access** | all of the above, plus `rules` | A key you keep on your own machine. |
+
+`weedout create`, `link` and `key regenerate` all take `--scope` if you want
+something other than the default.
 
 The split matters because a key in a pipeline is readable by anyone who can
 read a build log. If that key could also add an ignore rule, whoever took it
@@ -236,8 +328,19 @@ when scopes arrived.
 ```sh
 weedout rules                                            # what is in force
 weedout rules ignore CVE-2021-23337 --reason "not reachable from our code"
+weedout rules ignore --package "@acme/*" --reason "internal mirror of a public name"
 weedout rules unignore CVE-2021-23337
 ```
+
+`--package` takes a glob and covers every advisory written about anything
+matching it, including ones published after you write the rule. It is for the
+case an advisory id cannot serve: a private package mirrored under a name that
+also exists on the public registry matches advisories about somebody else's
+code, and the list of ids to enumerate grows every time that other project
+publishes one.
+
+Quote the glob. An unquoted `@acme/*` is expanded by your shell against the
+working directory before Weedout ever sees it.
 
 The reason is required. A rule with no reason is indistinguishable from a
 mistake when somebody reads it back in six months.

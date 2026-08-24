@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,10 +14,26 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestTheMenuRunsWhatWasChosen(t *testing.T) {
-	// "8" is Help, which is the one entry that touches neither the network nor
-	// the filesystem, so this tests the routing rather than a command.
+	// Help is the one entry that touches neither the network nor the
+	// filesystem, so choosing it tests the routing rather than a command.
+	//
+	// Its position is looked up rather than hardcoded. It was 8 until two
+	// entries were inserted above it, and a test that breaks whenever the
+	// menu grows teaches people to edit the number instead of reading the
+	// failure.
+	choice := 0
+	for i, entry := range menuChoices {
+		if entry.Value == "help" {
+			choice = i + 1
+			break
+		}
+	}
+	if choice == 0 {
+		t.Fatal("the menu no longer offers Help")
+	}
+
 	var out bytes.Buffer
-	printer := ui.New(&out).WithInput(strings.NewReader("8\n"))
+	printer := ui.New(&out).WithInput(strings.NewReader(fmt.Sprintf("%d\n", choice)))
 
 	code := runMenu(printer, &out, &out)
 
@@ -42,11 +59,17 @@ func TestBackingOutOfTheMenuIsNotAFailure(t *testing.T) {
 func TestEveryMenuEntryNamesARealCommand(t *testing.T) {
 	// A menu entry whose value is not a command would print "Unknown command"
 	// at somebody who picked it from a list this program drew.
-	known := map[string]bool{
-		"scan": true, "init": true, "status": true, "findings": true,
-		"history": true, "supply-chain": true, "rules": true,
-		"update": true, "help": true, "version": true,
+	//
+	// Checked against the dispatch itself rather than a list kept here. The
+	// list version passed for a while after three real commands were added to
+	// the menu, because it only knew about the commands that existed when it
+	// was written -- which is the failure it was supposed to catch, one level
+	// up.
+	known := map[string]bool{}
+	for _, name := range commandsInDispatch(t) {
+		known[name] = true
 	}
+
 	for _, choice := range menuChoices {
 		if !known[choice.Value] {
 			t.Errorf("menu entry %q routes to %q, which is not a command",

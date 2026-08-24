@@ -85,6 +85,16 @@ func reportInteractive(printer *ui.Printer, current settings.Settings) {
 }
 
 // menuChoices are the commands reachable from the menu.
+//
+// A curated subset, not a mirror of every command. Anything that needs a flag
+// to be useful -- `rules ignore`, `key regenerate`, `scan --profile` -- is left
+// out, because a menu entry that runs a command with no arguments and then
+// prints a usage error is worse than no entry.
+//
+// What is here is everything a person who never types the commands would
+// otherwise never find. `Sign this machine in` is first among those: somebody
+// who has turned the menu on and has no credential yet would get "no API key"
+// from every other entry and no way forward.
 var menuChoices = []ui.Choice{
 	{Label: "Scan this project", Hint: "check dependencies now", Value: "scan"},
 	{Label: "Status", Hint: "counts and when it was last checked", Value: "status"},
@@ -92,6 +102,10 @@ var menuChoices = []ui.Choice{
 	{Label: "History", Hint: "recent scans and the trend", Value: "history"},
 	{Label: "Supply chain", Hint: "signals about the packages", Value: "supply-chain"},
 	{Label: "Rules", Hint: "what is reported, and what is not", Value: "rules"},
+	{Label: "Rule profiles", Hint: "which set of rules applies here", Value: "profiles"},
+	{Label: "Who am I", Hint: "account, and what this directory is linked to", Value: "whoami"},
+	{Label: "Sign this machine in", Hint: "confirm a code in your browser", Value: "auth"},
+	{Label: "Connect this directory", Hint: "to a project you already have", Value: "link"},
 	{Label: "Check for updates", Hint: "", Value: "update"},
 	{Label: "Help", Hint: "", Value: "help"},
 }
