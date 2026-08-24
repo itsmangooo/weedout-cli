@@ -23,6 +23,8 @@ import (
 
 // Status is a project at a glance -- what the dashboard leads with.
 type Status struct {
+	// Plan is what the account can do right now. See plan.go.
+	Plan         Plan           `json:"plan"`
 	Project      string         `json:"project"`
 	Ecosystem    string         `json:"ecosystem"`
 	Dependencies int            `json:"dependencies"`
@@ -71,6 +73,7 @@ func (d Detail) Chain() string {
 
 // Findings is one page of findings.
 type Findings struct {
+	Plan     Plan     `json:"plan"`
 	Show     string   `json:"show"`
 	Count    int      `json:"count"`
 	Findings []Detail `json:"findings"`

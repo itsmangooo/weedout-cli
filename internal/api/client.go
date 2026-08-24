@@ -57,7 +57,10 @@ type Finding struct {
 
 // Result is the parsed scan response.
 type Result struct {
-	Project             string         `json:"project"`
+	Project string `json:"project"`
+	// Plan is what the account could do when this scan ran. Present so the
+	// CLI can notice a change since last time and say so.
+	Plan                Plan           `json:"plan"`
 	DependenciesScanned int            `json:"dependencies_scanned"`
 	Actionable          int            `json:"actionable"`
 	Suppressed          int            `json:"suppressed"`

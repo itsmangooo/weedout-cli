@@ -110,6 +110,7 @@ func runStatus(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitOK
 	}
 
+	announcePlan(printer, status.Plan, false, false)
 	printStatus(printer, status)
 	return ExitOK
 }
@@ -226,6 +227,7 @@ func runFindings(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitOK
 	}
 
+	announcePlan(printer, found.Plan, false, false)
 	printFindings(printer, found)
 	return ExitOK
 }

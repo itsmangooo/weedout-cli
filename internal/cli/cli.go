@@ -266,6 +266,10 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 
 	blocking := result.BlockingAt(threshold)
 
+	// Before the report, so somebody reading a deeper result than they got
+	// yesterday learns why at the top rather than after the findings.
+	announcePlan(printer, result.Plan, *quiet, *asJSON)
+
 	// --quiet means the exit code is the whole answer. Useful in a pipeline
 	// step that only gates, and in a pre-commit hook where the scan is not the
 	// thing the developer is looking at. Errors still go to stderr: silencing

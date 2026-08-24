@@ -268,6 +268,26 @@ put a key next to their code meant that key.
 
 `--url` / `WEEDOUT_URL` points the CLI at a self-hosted instance.
 
+### When the plan changes
+
+An upgrade or downgrade applies to your **next command**. Nothing caches the
+tier, so there is no window to wait out and no need to sign in again. The CLI
+notices and says so once:
+
+```
+Your plan is now Pro. Scans reach the whole dependency tree, and your custom
+rules apply.
+```
+
+Silent under `--quiet` and `--json`, which promise that the output is only what
+was asked for. The plan is in the JSON either way, under `plan`.
+
+Nothing is destroyed by a downgrade. Rules and profiles stay exactly as they
+are and stop applying, so re-subscribing needs no reconstruction.
+
+The CLI never decides anything from this. Every limit is enforced on the
+server; the block it reads is for saying what changed, not for gating.
+
 ### Where the global config lives
 
 `weedout auth` and `weedout link` write to the directory the operating system
