@@ -147,6 +147,10 @@ type Thresholds struct {
 
 // Rules is everything that shapes what this project reports.
 type Rules struct {
+	// Plan matters here more than anywhere else: a Free account sees a tidy
+	// list of rules that are not doing anything, and nothing else on the page
+	// would say so.
+	Plan       Plan       `json:"plan"`
 	Thresholds Thresholds `json:"thresholds"`
 	Ignores    []Ignore   `json:"ignores"`
 	PolicyFile PolicyFile `json:"policy_file"`
@@ -179,6 +183,20 @@ func GetProfiles(baseURL, apiKey string, timeout time.Duration) (Profiles, error
 	var out Profiles
 	err := call(baseURL, apiKey, http.MethodGet, "/api/v1/profiles", nil, timeout, &out)
 	return out, err
+}
+
+// HasAny reports whether this project has configured anything at all.
+//
+// Used to decide whether a "none of these are applying" warning has a subject.
+// Telling a Free account with no rules that its rules are not applying would be
+// noise, and noise on a page about filtering noise is worse than most.
+func (r Rules) HasAny() bool {
+	return len(r.Ignores) > 0 ||
+		r.Thresholds.Direct != "" ||
+		r.Thresholds.Transitive != "" ||
+		r.Thresholds.EPSS != nil ||
+		len(r.PolicyFile.Ignores) > 0 ||
+		len(r.PolicyFile.IgnoredPackages) > 0
 }
 
 // GetStatus fetches the project overview.
