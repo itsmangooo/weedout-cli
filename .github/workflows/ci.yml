@@ -1,0 +1,117 @@
+# Tests, vet, formatting — and the CLI scanned against itself.
+#
+# The last one is the point of this file existing separately from action.yml.
+# A security tool that never runs against its own supply chain is a tool whose
+# authors have not used it the way their users do, and weedout.dev makes a
+# public claim about this repository's dependencies that nothing was keeping
+# true.
+#
+# Two checks, because they fail for different reasons and need different
+# things:
+#
+#   `test`  runs on every pull request including from forks. No secret. The
+#           "no dependencies" assertion lives here, so the claim on the landing
+#           page cannot quietly become false.
+#
+#   `vet`   scans whatever dependencies exist against the real service. Needs a
+#           key, so it skips where one is not available rather than failing —
+#           a fork's pull request cannot have one, and a red tick for that is
+#           noise that teaches people to ignore red ticks.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      # Three platforms because this binary runs on all three and the paths
+      # are where it differs: config directories, case-insensitive
+      # filesystems, and how a browser gets opened.
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Formatting
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  vet-dependencies:
+    name: our own dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      # Built from this checkout rather than downloaded. A pull request that
+      # changes both the scanner and its dependencies should be vetted by the
+      # scanner as changed, not by the last release.
+      - name: Build the CLI from this checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -o "$RUNNER_TEMP/bin/weedout" .
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # The vetting logic itself, against a mock. Runs everywhere, secret or
+      # not: a check that only ever passes is indistinguishable from no check,
+      # and this is what proves it goes red when it should.
+      - name: The check fails when it should
+        shell: bash
+        run: ./scripts/test/vet_test.sh
+
+      - name: Is a key available?
+        id: secret
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.WEEDOUT_API_KEY }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "No WEEDOUT_API_KEY, so the live dependency scan was skipped."
+              echo ""
+              echo "The offline check above still ran, and \`go test .\` still asserts"
+              echo "this repository has no third-party dependencies at all."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Scan our own dependencies
+        if: steps.secret.outputs.available == 'true'
+        shell: bash
+        run: ./scripts/vet-dependencies.sh
+        env:
+          WEEDOUT_API_KEY: ${{ secrets.WEEDOUT_API_KEY }}
