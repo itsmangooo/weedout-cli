@@ -434,5 +434,12 @@ to the numbers that just failed the build.
 
 ## Licence
 
-Not yet chosen. Until one is added, the usual default applies: all rights
-reserved.
+[MIT](LICENSE).
+
+Permissive on purpose. This binary runs inside other people's CI, with their
+credentials in the environment, and the landing page invites anyone to check
+its dependency list and verify it has none. A tool making that argument should
+be one you can read, audit and vendor without asking.
+
+The hosted service it talks to is a separate repository under a different
+licence.
