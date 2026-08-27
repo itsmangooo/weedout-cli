@@ -40,9 +40,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
       # Three platforms because this binary runs on all three and the paths
       # are where it differs: config directories, case-insensitive
@@ -71,9 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "stable"
 
       # Built from this checkout rather than downloaded. A pull request that
       # changes both the scanner and its dependencies should be vetted by the

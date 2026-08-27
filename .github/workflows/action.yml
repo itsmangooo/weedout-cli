@@ -33,9 +33,11 @@ jobs:
       # The action ships pre-built binaries, but the test needs one before a
       # release exists — and building from source here also catches the case
       # where the CLI and the action disagree about the JSON shape.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          # Keep the language baseline in go.mod, but build distributed
+          # binaries with a supported, security-patched toolchain.
+          go-version: "stable"
 
       # From this checkout, so a change to the CLI and a change to the action
       # are tested against each other rather than against the last release.

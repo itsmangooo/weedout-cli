@@ -233,6 +233,33 @@ func TestASiblingDirectoryIsNotAMatch(t *testing.T) {
 	}
 }
 
+func TestASymlinkedPathFindsTheSameProject(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks is not reliably available to unprivileged Windows users")
+	}
+
+	file := File{Projects: map[string]Project{}}
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(real, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Link(alias, Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	if project, _, found := file.ProjectFor(real); !found || project.ID != 1 {
+		t.Error("the physical and symlinked spellings became separate checkouts")
+	}
+	if project, _, found := file.ProjectFor(filepath.Join(alias, "not-created")); !found || project.ID != 1 {
+		t.Error("a missing subdirectory lost the symlinked checkout")
+	}
+}
+
 func TestAnUnrelatedDirectoryFindsNothing(t *testing.T) {
 	file := File{Projects: map[string]Project{}}
 	if _, err := file.Link(filepath.Join(t.TempDir(), "app"), Project{ID: 1}); err != nil {
