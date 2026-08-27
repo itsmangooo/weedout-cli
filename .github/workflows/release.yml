@@ -21,9 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          # The `go 1.22` directive is the source compatibility floor, not a
+          # safe toolchain to ship years later. `stable` follows Go's current
+          # supported line and therefore receives standard-library fixes.
+          go-version: "stable"
           check-latest: true
 
       # Tests before binaries. A release that fails its own suite should not
@@ -68,9 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "stable"
           check-latest: true
 
       - name: Build

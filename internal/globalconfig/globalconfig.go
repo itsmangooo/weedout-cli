@@ -185,6 +185,12 @@ func SaveTo(path string, file File) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("could not create %s: %w", dir, err)
 	}
+	// MkdirAll leaves an existing directory's mode untouched. That matters for
+	// upgrades and for WEEDOUT_CONFIG_HOME: a directory created earlier as 0755
+	// would otherwise keep exposing credential filenames to other accounts.
+	if err := os.Chmod(dir, 0o700); err != nil && runtime.GOOS != "windows" {
+		return fmt.Errorf("could not secure %s: %w", dir, err)
+	}
 
 	body, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
