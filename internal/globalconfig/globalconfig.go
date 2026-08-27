@@ -337,6 +337,14 @@ func (f File) SignedIn() bool {
 // hand the same checkout two different keys.
 func normalise(path string) string {
 	cleaned := filepath.Clean(path)
+	// macOS exposes some directories through aliases such as /var ->
+	// /private/var. os.Getwd returns the physical path while a caller can hand
+	// Link the alias, so case-folding alone can still store the same checkout
+	// twice. Resolve links when the path exists; keep the cleaned spelling for
+	// paths that no longer exist so old config entries remain readable.
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		cleaned = resolved
+	}
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		return strings.ToLower(cleaned)
 	}
