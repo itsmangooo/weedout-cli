@@ -255,6 +255,9 @@ func TestASymlinkedPathFindsTheSameProject(t *testing.T) {
 	if project, _, found := file.ProjectFor(real); !found || project.ID != 1 {
 		t.Error("the physical and symlinked spellings became separate checkouts")
 	}
+	if project, _, found := file.ProjectFor(filepath.Join(alias, "not-created")); !found || project.ID != 1 {
+		t.Error("a missing subdirectory lost the symlinked checkout")
+	}
 }
 
 func TestAnUnrelatedDirectoryFindsNothing(t *testing.T) {

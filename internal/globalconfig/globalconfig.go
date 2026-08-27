@@ -340,13 +340,31 @@ func normalise(path string) string {
 	// macOS exposes some directories through aliases such as /var ->
 	// /private/var. os.Getwd returns the physical path while a caller can hand
 	// Link the alias, so case-folding alone can still store the same checkout
-	// twice. Resolve links when the path exists; keep the cleaned spelling for
-	// paths that no longer exist so old config entries remain readable.
-	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
-		cleaned = resolved
-	}
+	// twice. Resolve the longest existing prefix rather than only the complete
+	// path: ProjectFor intentionally accepts a not-yet-created subdirectory.
+	cleaned = resolveExistingPrefix(cleaned)
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		return strings.ToLower(cleaned)
 	}
 	return cleaned
+}
+
+func resolveExistingPrefix(path string) string {
+	current := path
+	suffix := make([]string, 0, 4)
+	for {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return resolved
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
