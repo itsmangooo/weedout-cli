@@ -9,8 +9,8 @@ import (
 
 // Two things this covers, and the first is a bug rather than a feature.
 //
-// `.weedout.yml` was documented, parsed by the server, gated as a Pro
-// capability -- and never uploaded by anything. The server accepts it as a
+// `.weedout.yml` was documented and parsed by the server, but the CLI once
+// failed to upload it. The server accepts it as a
 // multipart field on /api/v1/scan and no client sent one, so every rule anybody
 // wrote in a repository was dead text. These tests are what keeps it sent.
 //

@@ -42,7 +42,7 @@ func runUpdate(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	assumeYes := fs.Bool("yes", false, "install without asking")
 	fs.BoolVar(assumeYes, "y", false, "install without asking")
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	current := settings.Load()

@@ -41,7 +41,7 @@ func runAuth(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	label := fs.String("label", "", "what to call this machine in your account settings")
 	timeout := fs.Int("timeout", 30, "seconds to wait for each request")
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	existing, _ := globalconfig.Load()
@@ -158,7 +158,7 @@ func runLogout(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	all := fs.Bool("all", false, "also forget every project key stored on this machine")
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	file, err := globalconfig.Load()
@@ -204,7 +204,7 @@ func runWhoami(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "print the result as JSON instead of prose")
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	file, _ := globalconfig.Load()

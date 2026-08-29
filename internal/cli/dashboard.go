@@ -89,7 +89,7 @@ func runStatus(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	flags := addCommonFlags(fs)
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	cfg, ok := flags.resolve(printer)
@@ -110,7 +110,6 @@ func runStatus(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitOK
 	}
 
-	announcePlan(printer, status.Plan, false, false)
 	printStatus(printer, status)
 	return ExitOK
 }
@@ -200,7 +199,7 @@ func runFindings(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	show := fs.String("show", "open", "open, filtered, dismissed or resolved")
 	limit := fs.Int("limit", 50, "how many to list")
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	if !validShow(*show) {
@@ -227,7 +226,6 @@ func runFindings(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitOK
 	}
 
-	announcePlan(printer, found.Plan, false, false)
 	printFindings(printer, found)
 	return ExitOK
 }
@@ -265,6 +263,10 @@ func printFindings(printer *ui.Printer, found api.Findings) {
 			tags = append(tags, printer.Dim(fmt.Sprintf("%.0f%% exploit likelihood", *finding.EPSS*100)))
 		}
 		printer.Line("    ", strings.Join(tags, printer.Dim("  "+printer.Symbol("sep")+"  ")))
+		printer.Line("    ", printer.Dim("reachability: "+humanReachability(finding.Reachability)))
+		for _, evidence := range finding.ReachabilityEvidence {
+			printer.Line("    ", printer.Dim(evidence.Explanation))
+		}
 
 		if finding.Summary != "" {
 			printer.Line("    ", printer.Dim(truncate(finding.Summary, 72)))
@@ -332,7 +334,7 @@ func runHistory(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	flags := addCommonFlags(fs)
 	limit := fs.Int("limit", 20, "how many scans to show")
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	cfg, ok := flags.resolve(printer)
@@ -437,7 +439,7 @@ func runSupplyChain(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	flags := addCommonFlags(fs)
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	cfg, ok := flags.resolve(printer)

@@ -71,7 +71,7 @@ func runRulesList(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	flags := addCommonFlags(fs)
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	cfg, ok := flags.resolve(printer)
@@ -92,7 +92,6 @@ func runRulesList(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		return ExitOK
 	}
 
-	announcePlan(printer, rules.Plan, false, false)
 	printRules(printer, rules)
 	return ExitOK
 }
@@ -100,16 +99,6 @@ func runRulesList(argv []string, printer *ui.Printer, stderr io.Writer) int {
 func printRules(printer *ui.Printer, rules api.Rules) {
 	printer.Line()
 
-	// Before the list, not after it. Somebody scrolling a tidy set of rules
-	// that are not in force needs to know that before they read them, and a
-	// footnote under twelve entries is a footnote nobody reaches.
-	if rules.Plan.Known() && !rules.Plan.CustomRules && rules.HasAny() {
-		printer.Line("  ", printer.Yellow("None of these are applying."))
-		printer.Line("  ", printer.Dim(
-			"Custom scan rules are part of the Pro plan. Everything below is kept "+
-				"exactly as it is and starts applying again if you upgrade."))
-		printer.Line()
-	}
 	printer.Line("  ", printer.Bold("Alert when"))
 
 	direct := rules.Thresholds.Direct

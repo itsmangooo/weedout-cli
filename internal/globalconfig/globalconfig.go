@@ -92,18 +92,6 @@ type File struct {
 	// BaseURL is set only when it is not the default, so a config file copied
 	// between machines does not silently pin an old endpoint.
 	BaseURL string `json:"base_url,omitempty"`
-	// LastSeenPlan is the tier the server last reported to this machine.
-	//
-	// The whole mechanism behind noticing a plan change. A CLI cannot be
-	// pushed to, so it compares what the server just said against what it said
-	// last time and mentions the difference once. Empty on a machine that has
-	// never run a command, which is why the first run says nothing: everything
-	// is new then, and "your plan is now Free" is not news.
-	//
-	// A hint for a message, never a decision. Every limit is enforced on the
-	// server; a client that gated on this would be a client somebody could
-	// edit.
-	LastSeenPlan string `json:"last_seen_plan,omitempty"`
 	// Projects maps an absolute repository path to what is known about it.
 	Projects map[string]Project `json:"projects,omitempty"`
 }
@@ -287,36 +275,6 @@ func (f *File) Unlink(dir string) bool {
 	}
 	delete(f.Projects, key)
 	return true
-}
-
-// NotePlan records the tier the server just reported, and says whether it
-// differs from the last one seen.
-//
-// Saving is best-effort by design: a config that cannot be written is not a
-// reason to fail a scan somebody is waiting on, and the cost of failing to
-// remember is that the same message appears twice.
-func NotePlan(tier string) (changed bool, previous string) {
-	if tier == "" {
-		return false, ""
-	}
-
-	file, err := Load()
-	if err != nil {
-		return false, ""
-	}
-
-	previous = file.LastSeenPlan
-	if previous == tier {
-		return false, previous
-	}
-
-	file.LastSeenPlan = tier
-	_ = Save(file)
-
-	// A first run has nothing to compare against. Announcing a change on the
-	// very first command would greet every new user with news about a plan
-	// they just chose.
-	return previous != "", previous
 }
 
 // SignedIn reports whether this machine holds an account token.

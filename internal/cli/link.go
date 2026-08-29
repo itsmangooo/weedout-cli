@@ -38,7 +38,7 @@ func runLink(argv []string, printer *ui.Printer, stderr io.Writer) int {
 
 	path, err := parseWithPath(fs, argv)
 	if err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 	dir := resolveDir(path)
 
@@ -83,7 +83,7 @@ func runCreate(argv []string, printer *ui.Printer, stderr io.Writer) int {
 
 	name, err := parseWithPath(fs, argv)
 	if err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	dir, err := os.Getwd()
@@ -135,7 +135,7 @@ func runUnlink(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	path, err := parseWithPath(fs, argv)
 	if err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 	dir := resolveDir(path)
 
@@ -179,7 +179,7 @@ leaves you with something that works rather than nothing.
 	baseURL := fs.String("url", "", "API base URL")
 	timeout := fs.Int("timeout", 30, "seconds to wait")
 	if err := fs.Parse(argv[1:]); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	dir, err := os.Getwd()

@@ -50,26 +50,43 @@ type Finding struct {
 	// Malicious is its own field rather than a severity value: a malicious
 	// package carries no CVSS score, so anything that ranks severities would
 	// sort the worst finding here below a medium.
-	Malicious bool   `json:"malicious"`
-	FixedIn   string `json:"fixed_in"`
-	Summary   string `json:"summary"`
+	Malicious            bool                   `json:"malicious"`
+	FixedIn              string                 `json:"fixed_in"`
+	Summary              string                 `json:"summary"`
+	Reachability         string                 `json:"reachability"`
+	ReachabilityEvidence []ReachabilityEvidence `json:"reachability_evidence"`
+}
+
+type ReachabilityEvidence struct {
+	SourceFile      string   `json:"source_file"`
+	Line            int      `json:"line"`
+	ImportKind      string   `json:"import_kind"`
+	ImportedPackage string   `json:"imported_package"`
+	DependencyPath  []string `json:"dependency_path"`
+	Explanation     string   `json:"explanation"`
+}
+
+type ReachabilitySummary struct {
+	AnalysisComplete bool           `json:"analysis_complete"`
+	SourceFiles      int            `json:"source_files"`
+	Counts           map[string]int `json:"counts"`
 }
 
 // Result is the parsed scan response.
 type Result struct {
 	Project string `json:"project"`
-	// Plan is what the account could do when this scan ran. Present so the
-	// CLI can notice a change since last time and say so.
-	Plan                Plan           `json:"plan"`
-	DependenciesScanned int            `json:"dependencies_scanned"`
-	Actionable          int            `json:"actionable"`
-	Suppressed          int            `json:"suppressed"`
-	New                 int            `json:"new"`
-	Resolved            int            `json:"resolved"`
-	Counts              map[string]int `json:"counts"`
-	Findings            []Finding      `json:"findings"`
-	Warnings            []string       `json:"warnings"`
-	DashboardURL        string         `json:"dashboard_url"`
+	// Plan is the server's single Free capability metadata.
+	Plan                Plan                `json:"plan"`
+	DependenciesScanned int                 `json:"dependencies_scanned"`
+	Actionable          int                 `json:"actionable"`
+	Suppressed          int                 `json:"suppressed"`
+	New                 int                 `json:"new"`
+	Resolved            int                 `json:"resolved"`
+	Counts              map[string]int      `json:"counts"`
+	Findings            []Finding           `json:"findings"`
+	Warnings            []string            `json:"warnings"`
+	DashboardURL        string              `json:"dashboard_url"`
+	Reachability        ReachabilitySummary `json:"reachability"`
 }
 
 // Critical is the count of critical-severity findings.
@@ -171,7 +188,15 @@ type ScanRequest struct {
 	// server decide from the project and the account default. Resolved
 	// server-side -- a name that does not exist fails the scan rather than
 	// quietly running on the defaults.
-	Profile string
+	Profile        string
+	Sources        []SourceFile
+	SourceComplete bool
+	SourceNotes    []string
+}
+
+type SourceFile struct {
+	Path    string
+	Content []byte
 }
 
 func PostScan(baseURL, apiKey, path string, timeout time.Duration) (Result, error) {
@@ -231,6 +256,27 @@ func PostScanRequest(
 		_ = writer.WriteField("profile", req.Profile)
 	}
 
+	for _, source := range req.Sources {
+		part, createErr := writer.CreateFormFile("sources", filepath.Base(source.Path))
+		if createErr != nil {
+			return Result{}, &Error{Message: createErr.Error(), Code: "encode_failed"}
+		}
+		if _, writeErr := part.Write(source.Content); writeErr != nil {
+			return Result{}, &Error{Message: writeErr.Error(), Code: "encode_failed"}
+		}
+	}
+	context, err := json.Marshal(map[string]any{
+		"complete": req.SourceComplete,
+		"files":    sourcePaths(req.Sources),
+		"notes":    req.SourceNotes,
+	})
+	if err != nil {
+		return Result{}, &Error{Message: err.Error(), Code: "encode_failed"}
+	}
+	if err := writer.WriteField("source_context", string(context)); err != nil {
+		return Result{}, &Error{Message: err.Error(), Code: "encode_failed"}
+	}
+
 	if err := writer.Close(); err != nil {
 		return Result{}, &Error{Message: err.Error(), Code: "encode_failed"}
 	}
@@ -276,6 +322,14 @@ func PostScanRequest(
 		result.Counts = map[string]int{}
 	}
 	return result, nil
+}
+
+func sourcePaths(files []SourceFile) []string {
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, file.Path)
+	}
+	return paths
 }
 
 // Attempts is how many times a transient failure is retried before giving up.

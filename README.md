@@ -248,6 +248,9 @@ update_checks = true
 committed by accident can never quietly override the one your pipeline was
 configured with.
 
+The command never prompts by echoing a credential. Supply the key through the
+environment (recommended) or `--api-key`.
+
 ## Configuration
 
 Resolved highest-first:
@@ -268,25 +271,11 @@ put a key next to their code meant that key.
 
 `--url` / `WEEDOUT_URL` points the CLI at a self-hosted instance.
 
-### When the plan changes
+### One Free product
 
-An upgrade or downgrade applies to your **next command**. Nothing caches the
-tier, so there is no window to wait out and no need to sign in again. The CLI
-notices and says so once:
-
-```
-Your plan is now Pro. Scans reach the whole dependency tree, and your custom
-rules apply.
-```
-
-Silent under `--quiet` and `--json`, which promise that the output is only what
-was asked for. The plan is in the JSON either way, under `plan`.
-
-Nothing is destroyed by a downgrade. Rules and profiles stay exactly as they
-are and stop applying, so re-subscribing needs no reconstruction.
-
-The CLI never decides anything from this. Every limit is enforced on the
-server; the block it reads is for saying what changed, not for gating.
+The full dependency tree, source reachability evidence, rules, profiles,
+alerts and CI behavior are included in Free. The API still returns a `plan`
+block for compatibility, but the CLI does not use it to gate behavior.
 
 ### Where the global config lives
 
@@ -305,13 +294,20 @@ every project key on the machine and look like being signed out for no reason.
 
 `weedout whoami` prints the path it read.
 
-### Scan rules travel with the scan
+### Source evidence and scan rules travel with the scan
 
 A `.weedout.yml` beside your lockfile, or up to six directories above it, is
-uploaded with every scan. `.weedout.yaml` works too. The server never sees your
-repository — only what is uploaded — so the rules have to travel with the scan,
-and that is also what makes CI the source of truth: the file that ran in the
-pipeline is the file that applied.
+uploaded with every scan. `.weedout.yaml` works too. For Node projects the CLI
+also discovers a bounded inventory of JavaScript and TypeScript source so the
+server can observe static imports and retain reachability evidence. Dependency,
+build, coverage, vendor, cache and hidden directories are skipped; symlinks are
+not followed.
+
+The inventory is limited to 512 files, 512 KiB per file and 4 MiB total. Raw
+source is analysed in memory and not persisted. If collection is incomplete or
+a non-literal import cannot be resolved, negative conclusions remain `unknown`.
+Reliable positive observations still retain source-line and dependency-path
+evidence.
 
 `.weedout` and `.weedout.yml` are different files doing opposite things. The
 first holds a credential and must stay out of the repository; the second holds
@@ -319,6 +315,21 @@ your rules and belongs in it.
 
 Run `weedout scan --verbose` to see which one was found, which key was used and
 which profile applied.
+
+### Reachability states
+
+Node scans report `reachable`, `potentially reachable`, `not observed`, or
+`unknown`. Direct/transitive relationship and severity never substitute for
+that state. Positive output includes evidence such as:
+
+```
+reachability: reachable
+evidence: src/api.js:4 imports axios
+```
+
+`not observed` is only emitted after a complete supported-source inventory.
+Missing source, non-literal dynamic imports, or an untraceable dependency path
+produce `unknown`.
 
 ### Key scopes
 
@@ -455,7 +466,8 @@ A summary in the Actions run, and the same summary as a pull request comment:
 > `acme-storefront` — 312 dependencies scanned.
 >
 > **47** advisories matched these dependencies and were deliberately not
-> reported — dev-only, transitive and unexploited, or below the bar.
+> reported — dev-only, below the severity bar, or otherwise suppressed by the
+> configured policy.
 >
 > | Exploited | Critical | High | Medium | Low |
 > | --: | --: | --: | --: | --: |

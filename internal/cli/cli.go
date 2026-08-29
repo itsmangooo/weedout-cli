@@ -16,6 +16,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ import (
 	"github.com/itsmangooo/weedout-cli/internal/api"
 	"github.com/itsmangooo/weedout-cli/internal/config"
 	"github.com/itsmangooo/weedout-cli/internal/detect"
+	"github.com/itsmangooo/weedout-cli/internal/reachability"
 	"github.com/itsmangooo/weedout-cli/internal/settings"
 	"github.com/itsmangooo/weedout-cli/internal/ui"
 )
@@ -38,6 +40,13 @@ const (
 	ExitFindings = 1
 	ExitError    = 2
 )
+
+func flagErrorExit(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return ExitOK
+	}
+	return ExitError
+}
 
 // Version is stamped at build time with -ldflags. The fallback marks a binary
 // built straight from source, so a bug report can say which it was.
@@ -95,8 +104,7 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	case "update", "upgrade", "self-update":
 		return runUpdate(argv[1:], printer, stderr)
 	case "version", "--version", "-version":
-		fmt.Fprintf(stdout, "weedout %s\n", Version)
-		return ExitOK
+		return runVersion(argv[1:], stdout, stderr)
 	case "help", "--help", "-h":
 		usage(stdout)
 		return ExitOK
@@ -105,6 +113,25 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		usage(stderr)
 		return ExitError
 	}
+}
+
+func runVersion(argv []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: weedout version")
+		fmt.Fprintln(stderr, "Print the packaged CLI version.")
+	}
+	if err := fs.Parse(argv); err != nil {
+		return flagErrorExit(err)
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "Unexpected argument %q.\n", fs.Arg(0))
+		fs.Usage()
+		return ExitError
+	}
+	fmt.Fprintf(stdout, "weedout %s\n", Version)
+	return ExitOK
 }
 
 func usage(out io.Writer) {
@@ -181,7 +208,7 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	// Flags may come before or after the path, which is what people expect.
 	path, err := parseWithPath(fs, argv)
 	if err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 	if path == "" {
 		path = "."
@@ -237,6 +264,7 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	// sees the checkout, so a .weedout.yml nobody uploads is a file that does
 	// nothing -- which is what it was until this looked for one.
 	policyPath, hasPolicy := config.FindPolicyFile(searchRoot)
+	sourceBundle := reachability.Collect(searchRoot)
 
 	if *verbose {
 		printer.Line(printer.Dim("Scanning " + manifest))
@@ -250,12 +278,23 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		if *profile != "" {
 			printer.Line(printer.Dim("Profile " + *profile))
 		}
+		printer.Line(printer.Dim(fmt.Sprintf(
+			"Reachability source: %d file(s), complete=%t",
+			len(sourceBundle.Files), sourceBundle.Complete)))
+	}
+
+	sourceFiles := make([]api.SourceFile, 0, len(sourceBundle.Files))
+	for _, source := range sourceBundle.Files {
+		sourceFiles = append(sourceFiles, api.SourceFile{Path: source.Path, Content: source.Content})
 	}
 
 	result, err := api.PostScanRequest(cfg.BaseURL, cfg.APIKey, api.ScanRequest{
-		ManifestPath: manifest,
-		PolicyPath:   policyPath,
-		Profile:      *profile,
+		ManifestPath:   manifest,
+		PolicyPath:     policyPath,
+		Profile:        *profile,
+		Sources:        sourceFiles,
+		SourceComplete: sourceBundle.Complete,
+		SourceNotes:    sourceBundle.Notes,
 	}, time.Duration(*timeout)*time.Second)
 	if err != nil {
 		printer.Line(printer.Red(err.Error()))
@@ -265,10 +304,6 @@ func runScan(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	}
 
 	blocking := result.BlockingAt(threshold)
-
-	// Before the report, so somebody reading a deeper result than they got
-	// yesterday learns why at the top rather than after the findings.
-	announcePlan(printer, result.Plan, *quiet, *asJSON)
 
 	// --quiet means the exit code is the whole answer. Useful in a pipeline
 	// step that only gates, and in a pre-commit hook where the scan is not the
@@ -372,7 +407,7 @@ func runInit(argv []string, printer *ui.Printer, stderr io.Writer) int {
 
 	path, err := parseWithPath(fs, argv)
 	if err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 	if path == "" {
 		path = "."
@@ -395,12 +430,9 @@ func runInit(argv []string, printer *ui.Printer, stderr io.Writer) int {
 		key = os.Getenv(config.EnvAPIKey)
 	}
 	if key == "" {
-		key = prompt(printer, "API key: ")
-	}
-	if key == "" {
 		printer.Line(printer.Red("No API key to write."))
 		printer.Line(printer.Dim(fmt.Sprintf(
-			"Pass --api-key, or set %s and run this again.", config.EnvAPIKey)))
+			"Set %s (recommended), or pass --api-key, and run this again.", config.EnvAPIKey)))
 		return ExitError
 	}
 
@@ -421,20 +453,6 @@ func runInit(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	printer.Line()
 	printer.Line(printer.Yellow("This file contains a credential. Add it to .gitignore."))
 	return ExitOK
-}
-
-// prompt reads one line from the terminal.
-//
-// Deliberately not hidden input: an API key is not a password, it is pasted
-// from a dashboard, and hiding it means people cannot see they pasted the
-// wrong thing. The warning about .gitignore is the control that matters.
-func prompt(printer *ui.Printer, label string) string {
-	fmt.Print(label)
-	var line string
-	if _, err := fmt.Fscanln(os.Stdin, &line); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(line)
 }
 
 // parseWithPath parses flags that may appear either side of the path.
@@ -462,6 +480,10 @@ func parseWithPath(fs *flag.FlagSet, argv []string) (string, error) {
 		}
 		if path == "" {
 			path = fs.Arg(0)
+		} else {
+			message := fmt.Sprintf("Unexpected extra path %q.", fs.Arg(0))
+			fmt.Fprintln(fs.Output(), message)
+			return "", errors.New(message)
 		}
 		rest = fs.Args()[1:]
 	}
@@ -484,6 +506,7 @@ func report(printer *ui.Printer, result api.Result, manifest string, threshold a
 	printer.Line(printer.Dim(fmt.Sprintf(
 		"%d dependencies scanned %s %d filtered out as noise",
 		result.DependenciesScanned, printer.Symbol("sep"), result.Suppressed)))
+	printReachabilitySummary(printer, result.Reachability)
 	printer.Line()
 
 	if result.Actionable == 0 {
@@ -524,6 +547,10 @@ func report(printer *ui.Printer, result api.Result, manifest string, threshold a
 			}
 			printer.Line(fmt.Sprintf("  %s %s@%s  %s  %s",
 				marker, f.Package, f.Version, printer.Dim(f.CVE), fix))
+			printer.Line("    ", printer.Dim("reachability: "+humanReachability(f.Reachability)))
+			for _, evidence := range f.ReachabilityEvidence {
+				printer.Line("    ", printer.Dim(evidence.Explanation))
+			}
 		}
 	}
 
@@ -537,4 +564,33 @@ func report(printer *ui.Printer, result api.Result, manifest string, threshold a
 		printer.Line(printer.Dim("  " + result.DashboardURL))
 	}
 	printer.Line()
+}
+
+func printReachabilitySummary(printer *ui.Printer, summary api.ReachabilitySummary) {
+	if summary.SourceFiles == 0 && len(summary.Counts) == 0 {
+		return
+	}
+	state := "incomplete"
+	if summary.AnalysisComplete {
+		state = "complete"
+	}
+	printer.Line(printer.Dim(fmt.Sprintf(
+		"Reachability: %d source file(s) %s %s",
+		summary.SourceFiles, printer.Symbol("sep"), state)))
+	parts := make([]string, 0, 4)
+	for _, name := range []string{"reachable", "potentially_reachable", "not_observed", "unknown"} {
+		if count := summary.Counts[name]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", strings.ReplaceAll(name, "_", " "), count))
+		}
+	}
+	if len(parts) > 0 {
+		printer.Line(printer.Dim("  " + strings.Join(parts, " "+printer.Symbol("sep")+" ")))
+	}
+}
+
+func humanReachability(value string) string {
+	if value == "" {
+		return "unknown"
+	}
+	return strings.ReplaceAll(value, "_", " ")
 }

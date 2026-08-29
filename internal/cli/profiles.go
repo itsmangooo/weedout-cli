@@ -28,7 +28,7 @@ func runProfiles(argv []string, printer *ui.Printer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	flags := addCommonFlags(fs)
 	if err := fs.Parse(argv); err != nil {
-		return ExitError
+		return flagErrorExit(err)
 	}
 
 	cfg, ok := flags.resolve(printer)

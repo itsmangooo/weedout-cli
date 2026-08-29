@@ -45,21 +45,24 @@ type Status struct {
 
 // Detail is one finding, carrying more than the scan response does.
 type Detail struct {
-	ID        int      `json:"id"`
-	Package   string   `json:"package"`
-	Version   string   `json:"version"`
-	CVE       string   `json:"cve"`
-	Advisory  string   `json:"advisory"`
-	Severity  string   `json:"severity"`
-	Exploited bool     `json:"exploited"`
-	Malicious bool     `json:"malicious"`
-	EPSS      *float64 `json:"epss"`
-	FixedIn   string   `json:"fixed_in"`
-	Summary   string   `json:"summary"`
-	Via       []string `json:"via"`
-	Depth     int      `json:"depth"`
-	Reason    string   `json:"reason"`
-	FirstSeen string   `json:"first_seen_at"`
+	ID                   int                    `json:"id"`
+	Package              string                 `json:"package"`
+	Version              string                 `json:"version"`
+	CVE                  string                 `json:"cve"`
+	Advisory             string                 `json:"advisory"`
+	Severity             string                 `json:"severity"`
+	Exploited            bool                   `json:"exploited"`
+	Malicious            bool                   `json:"malicious"`
+	EPSS                 *float64               `json:"epss"`
+	FixedIn              string                 `json:"fixed_in"`
+	Summary              string                 `json:"summary"`
+	Via                  []string               `json:"via"`
+	Depth                int                    `json:"depth"`
+	Reason               string                 `json:"reason"`
+	FirstSeen            string                 `json:"first_seen_at"`
+	Status               string                 `json:"status"`
+	Reachability         string                 `json:"reachability"`
+	ReachabilityEvidence []ReachabilityEvidence `json:"reachability_evidence"`
 }
 
 // Chain renders how a package got into the tree, which is usually the
@@ -147,9 +150,7 @@ type Thresholds struct {
 
 // Rules is everything that shapes what this project reports.
 type Rules struct {
-	// Plan matters here more than anywhere else: a Free account sees a tidy
-	// list of rules that are not doing anything, and nothing else on the page
-	// would say so.
+	// Plan exposes the same Free capability metadata as other API responses.
 	Plan       Plan       `json:"plan"`
 	Thresholds Thresholds `json:"thresholds"`
 	Ignores    []Ignore   `json:"ignores"`
