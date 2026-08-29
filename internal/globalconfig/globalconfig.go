@@ -173,6 +173,12 @@ func SaveTo(path string, file File) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("could not create %s: %w", dir, err)
 	}
+	// MkdirAll applies the mode only when it creates the final directory. An
+	// existing WEEDOUT_CONFIG_HOME (or a permissive umask-created directory)
+	// could otherwise remain world-readable while holding credential files.
+	if err := os.Chmod(dir, 0o700); err != nil && runtime.GOOS != "windows" {
+		return fmt.Errorf("could not secure %s: %w", dir, err)
+	}
 
 	body, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
